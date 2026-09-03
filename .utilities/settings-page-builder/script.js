@@ -32,14 +32,23 @@ const loadDefaultsModal = document.getElementById('modalLoadDefaults');
 let settingsData = null;
 let settingsMap = new Map();
 
-// Unique localStorage key prefix per widget (last path segment of widgetURL)
-const parts = widgetURL.replace(/\/+$/, '').split('/');
-const keyPrefix = parts[parts.length - 1];
+// Unique localStorage key prefix per widget = the WIDGET FOLDER name.
+// widgetURL looks like ".../<widget-folder>/index.html", so drop any trailing
+// filename (index.html or a bare "index") before taking the last path segment.
+// Using the raw last segment would yield "index.html" — a shared key that makes
+// every widget overwrite each other's saved settings.
+const keyPrefix = (() => {
+    let segments = widgetURL.replace(/\/+$/, '').split('/').filter(Boolean);
+    if (segments.length && /\.(html?|php|aspx?)$/i.test(segments[segments.length - 1])) {
+        segments = segments.slice(0, -1);
+    }
+    return segments[segments.length - 1] || 'widget';
+})();
 
-// Header: widget name derived from the widget URL's last path segment
+// Header: widget name derived from the widget folder name (kebab-case -> Title Case)
 if (keyPrefix) {
     widgetTitle.textContent = keyPrefix
-        .split('-')
+        .split(/[-_]/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
 }
