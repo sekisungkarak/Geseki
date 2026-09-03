@@ -1,0 +1,174 @@
+{
+	"groups": {
+		"Streamer.bot Connection": {
+			"open": false,
+			"icon": "ri-robot-2-fill",
+			"badge": "streamerbot"
+		},
+		"TikTok Connection": {
+			"open": true,
+			"icon": "ri-tiktok-fill",
+			"badge": "tiktok"
+		},
+		"General": {
+			"open": false,
+			"icon": "ri-settings-4-fill"
+		},
+		"Alert Events": {
+			"open": false,
+			"icon": "ri-notification-3-fill"
+		}
+	},
+	"settings": [
+		{
+			"id": "enableStreamerbot",
+			"label": "Enable Streamer.bot",
+			"description": "Hubungkan ke Streamer.bot untuk alert dan event",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "Streamer.bot Connection"
+		},
+		{
+			"id": "address",
+			"label": "Server IP",
+			"description": "Alamat IP server WebSocket Streamer.bot",
+			"type": "text",
+			"defaultValue": "127.0.0.1",
+			"group": "Streamer.bot Connection"
+		},
+		{
+			"id": "port",
+			"label": "Port",
+			"description": "Port WebSocket Streamer.bot",
+			"type": "number",
+			"defaultValue": 8080,
+			"min": 1024,
+			"max": 65535,
+			"group": "Streamer.bot Connection"
+		},
+		{
+			"id": "showTiktok",
+			"label": "Enable TikTok",
+			"description": "Aktifkan koneksi alert TikTok (TikFinity / IndoFinity)",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "TikTok Connection"
+		},
+		{
+			"id": "tiktokService",
+			"label": "TikTok Service Provider",
+			"description": "Pilih aplikasi penyedia event TikTok",
+			"type": "select",
+			"options": [
+				{
+					"value": "both",
+					"label": "Both (TikFinity & IndoFinity)"
+				},
+				{
+					"value": "tikfinity",
+					"label": "TikFinity (Port 21213)"
+				},
+				{
+					"value": "indofinity",
+					"label": "IndoFinity (Port 62024)"
+				}
+			],
+			"defaultValue": "both",
+			"group": "TikTok Connection"
+		},
+		{
+			"id": "tikfinityPort",
+			"label": "TikFinity Port",
+			"description": "Port WebSocket TikFinity Desktop App",
+			"type": "number",
+			"defaultValue": 21213,
+			"min": 1024,
+			"max": 65535,
+			"group": "TikTok Connection"
+		},
+		{
+			"id": "indofinityPort",
+			"label": "IndoFinity Port",
+			"description": "Port WebSocket IndoFinity Desktop App",
+			"type": "number",
+			"defaultValue": 62024,
+			"min": 1024,
+			"max": 65535,
+			"group": "TikTok Connection"
+		},
+		{
+			"id": "testAlertButton",
+			"label": "Send Test Alert",
+			"description": "Klik untuk menguji alert Dynamic Island di preview",
+			"type": "button",
+			"callFunction": "testWidget",
+			"group": "General"
+		},
+		{
+			"id": "font",
+			"label": "Font",
+			"description": "Ganti jenis font widget. <a href=\"ms-settings:fonts\" target=\"_blank\">Lihat font terpasang</a>",
+			"type": "font",
+			"defaultValue": "",
+			"group": "General"
+		},
+		{
+			"id": "streamStartedAt",
+			"label": "Stream Started At",
+			"description": "Waktu mulai livestream (contoh: 20:00 atau kosongkan untuk otomatis)",
+			"type": "text",
+			"defaultValue": "",
+			"group": "General"
+		},
+		{
+			"id": "weatherLocation",
+			"label": "Weather Location",
+			"description": "Lokasi untuk info cuaca",
+			"type": "text",
+			"defaultValue": "Jakarta",
+			"group": "General"
+		},
+		{
+			"id": "alertDuration",
+			"label": "Display & Alert Duration (seconds)",
+			"description": "Durasi setiap info widget berputar dan alert tampil (detik)",
+			"type": "number",
+			"min": 1,
+			"max": 30,
+			"defaultValue": 4,
+			"group": "General"
+		},
+		{
+			"id": "enableFollow",
+			"label": "Follow Alerts",
+			"description": "Tampilkan alert saat ada follower baru",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "Alert Events"
+		},
+		{
+			"id": "enableSubscribe",
+			"label": "Subscribe Alerts",
+			"description": "Tampilkan alert saat ada subscriber baru",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "Alert Events"
+		},
+		{
+			"id": "enableShare",
+			"label": "Share Alerts",
+			"description": "Tampilkan alert saat ada share live",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "Alert Events"
+		},
+		{
+			"id": "enableGift",
+			"label": "Gift Alerts",
+			"description": "Tampilkan alert saat ada gift",
+			"type": "checkbox",
+			"defaultValue": true,
+			"group": "Alert Events"
+		}
+	]
+}

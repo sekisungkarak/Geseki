@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" class="wa-dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Widget Settings</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/remixicon@4.9.1/fonts/remixicon.min.css">
+
+    <link rel="stylesheet" href="https://ka-f.webawesome.com/webawesome@3.10.0/styles/webawesome.css" />
+    <script type="module" src="https://ka-f.webawesome.com/webawesome@3.10.0/webawesome.loader.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/jpeg" href="../../resources/logo/sekisungkarak_logo.png">
+</head>
+
+<body>
+    <div id="container">
+        <div class="wrapper">
+
+            <!-- ── Settings Panel ─────────────────────────────── -->
+            <div id="settings">
+
+                <header>
+                    <img id="headerLogo" src="../../resources/logo/sekisungkarak_logo.png" alt="Sekisungkarak Logo" class="header-logo" onerror="this.style.display='none'">
+                    <h1 id="widgetTitle">Widget</h1>
+                    <div class="subtitle">Widget Settings</div>
+                </header>
+
+                <div id="settingsPanel">
+                    <div class="loading-settings">
+                        <i class="ri-loader-4-line"></i> Loading settings...
+                    </div>
+                </div>
+
+                <footer>
+                    <div class="url-bar">
+                        <button id="copyUrlButton"><i class="ri-file-copy-line"></i> Copy URL</button>
+                        <button id="loadDefaultsButton"><i class="ri-arrow-go-back-line"></i> Load Default Settings</button>
+                        <button id="openImportModal"><i class="ri-download-2-line"></i> Load Settings</button>
+                    </div>
+                </footer>
+
+            </div>
+
+            <!-- ── Widget Preview ─────────────────────────────── -->
+            <div id="preview">
+                <label id="unmute-label">Click to unmute...</label>
+                <iframe id="widgetPreview"></iframe>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ── Import Settings Modal ───────────────────────────── -->
+    <wa-dialog id="modalUrlImport" class="modal centered" without-header>
+
+        <h3>Import Settings</h3>
+
+        <span>Paste your widget URL here</span>
+        <wa-input id="importUrl" placeholder="http://127.0.0.1/widgets/...?..." autocomplete="off">
+            <wa-icon slot="start" name="link"></wa-icon>
+        </wa-input>
+
+        <wa-button class="button cancel" slot="footer" appearance="outlined">Cancel</wa-button>
+        <wa-button class="button save" slot="footer" variant="brand">Import</wa-button>
+
+    </wa-dialog>
+
+    <!-- ── Load Defaults Confirm Modal ─────────────────────── -->
+    <wa-dialog id="modalLoadDefaults" class="modal centered" without-header>
+
+        <h3>Load Default Settings</h3>
+
+        <div class="info">Are you sure? All current settings will be reset to their defaults.</div>
+
+        <wa-button class="button cancel" slot="footer" appearance="outlined">No</wa-button>
+        <wa-button class="button save" slot="footer" variant="brand">Yes</wa-button>
+
+    </wa-dialog>
+
+    <script src="https://unpkg.com/@streamerbot/client/dist/streamerbot-client.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
