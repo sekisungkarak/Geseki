@@ -7,7 +7,23 @@ const urlParams = new URLSearchParams(queryString);
 
 // Weather info
 const weatherLocation = urlParams.get("weatherLocation") || "Jakarta";
-const alertDisplayDuration = GetIntParam("alertDuration", 4) * 1000; // ms an alert stays visible
+// Durasi alert (detik -> ms). Dipakai HANYA untuk alert.
+const alertDisplayDuration = GetIntParam("alertDuration", 4) * 1000;
+
+// Durasi rotasi panel info (tanggal / jam / durasi / cuaca / penonton).
+// Sengaja terpisah dari alertDisplayDuration supaya antrean padat tidak
+// mempercepat putaran info.
+const infoCycleDuration = GetIntParam("infoDuration", 4) * 1000;
+
+// ---- Durasi alert dinamis saat antrean padat ----
+// Antrean = event yang MASIH MENUNGGU (alertQueue.length), tidak termasuk
+// alert yang sedang tayang.
+const queueThreshold = GetIntParam("queueThreshold", 2);        // <= ini -> pakai alertDisplayDuration
+const alertDurationMinMs = GetFloatParam("alertDurationMin", 1.5) * 1000;
+const burstFullBacklog = GetIntParam("burstFullBacklog", 6);    // backlog >= ini -> durasi minimum
+
+// Floor absolut: animasi pop 0.38s + transisi pill 0.35s harus sempat selesai.
+const MIN_ALERT_FLOOR_MS = 1000;
 
 // Custom Font (System font or Google Font)
 const font = urlParams.get("font") || "";
@@ -22,18 +38,29 @@ if (font) {
 }
 
 // TikTok parameters (ChatRD-style)
-const showTiktok = GetBoolParam("showTiktok", true);
 const tiktokService = (urlParams.get("tiktokService") || "both").toLowerCase(); // 'both', 'tikfinity', 'indofinity', 'none'
 const tikfinityPort = GetIntParam("tikfinityPort", 21213);
 const indofinityPort = GetIntParam("indofinityPort", 62024);
 const tikfinityHost = urlParams.get("tikfinityHost") || "localhost";
 const indofinityHost = urlParams.get("indofinityHost") || "localhost";
 
+// Live detection (TikTok LIVE Studio -> Stream Deck Socket.IO channel)
+const enableLiveDetect = GetBoolParam("enableLiveDetect", true);
+const liveStudioPort = GetIntParam("liveStudioPort", 0); // 0 = auto-scan
+const offlineText = urlParams.get("offlineText") || "Stream Offline";
+const offlineViewersText = urlParams.get("offlineViewersText") || "-";
+
 // Alert event filters
+const followMessage = urlParams.get("followMessage") || "followed!";
+const subscribeMessage = urlParams.get("subscribeMessage") || "subscribed!";
+const shareMessage = urlParams.get("shareMessage") || "shared the live!";
+const giftMessage = urlParams.get("giftMessage") || "sent {gift} x{count}!";
+
 const enableFollow = GetBoolParam("enableFollow", true);
 const enableSubscribe = GetBoolParam("enableSubscribe", true);
 const enableShare = GetBoolParam("enableShare", true);
 const enableGift = GetBoolParam("enableGift", true);
+const enableFirstChatter = GetBoolParam("enableFirstChatter", true);
 
 /////////////
 // HELPERS //
@@ -55,6 +82,14 @@ function GetBoolParam(paramName, defaultValue) {
 	return defaultValue;
 }
 
+// Sama seperti GetIntParam tapi menerima desimal (parseInt memotong 1.5 -> 1).
+function GetFloatParam(paramName, defaultValue) {
+	const paramValue = urlParams.get(paramName);
+	if (paramValue === null) return defaultValue;
+	const floatValue = parseFloat(paramValue);
+	return isNaN(floatValue) ? defaultValue : floatValue;
+}
+
 function FormatDuration(ms) {
 	const totalSeconds = Math.floor(ms / 1000);
 	const hours = Math.floor(totalSeconds / 3600);
@@ -63,11 +98,36 @@ function FormatDuration(ms) {
 	return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+// Format angka penonton — mengikuti formatNumber() milik ChatRD
+// (js/chatrd.js:639). Compact: >= 1.000.000 -> "1.2M", >= 1.000 -> "1.5K",
+// di bawah itu apa adanya. Angka "1.234.567" yang panjang bikin pill
+// dynamic island melebar, jadi format compact lebih cocok di sini.
+function FormatViewers(count) {
+	let n = Number(count);
+	if (!isFinite(n) || isNaN(n) || n < 0) return '0';
+	n = Math.floor(n);
+
+	if (n >= 1000000) {
+		let s = (n / 1000000).toFixed(1);
+		if (s.endsWith('.0')) s = s.slice(0, -2);
+		return s + 'M';
+	}
+	if (n >= 1000) {
+		let s = (n / 1000).toFixed(1);
+		if (s.endsWith('.0')) s = s.slice(0, -2);
+		return s + 'K';
+	}
+	return n.toString();
+}
+
 ///////////////////////
 // DYNAMIC ISLAND    //
 ///////////////////////
 
 const dynamicIsland = document.getElementById('dynamicIsland');
+if ((urlParams.get("widgetStyle") || "solid") === "solid") {
+	dynamicIsland.classList.add("style-solid");
+}
 const islandAvatar = document.getElementById('islandAvatar');
 const islandIcon = document.getElementById('islandIcon');
 const islandContent = document.getElementById('islandContent');
@@ -107,30 +167,20 @@ let secondTicker = null;
 let isAlertActive = false;
 const widgetStartTime = Date.now();
 
-function GetTimeNowText() {
-	const now = new Date();
-	return now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\./g, ':');
-}
+// ---- Status live (dari deteksi LIVE Studio) ----
+// null = belum diketahui, 0 = offline, 1 = paused, 2 = live
+let liveStatus = null;
+// Waktu mulai live yang sudah disepakati (ms). Diisi dari deteksi / localStorage / manual.
+let liveStartedAtMs = null;
+// Penanda: waktu mulai berasal dari localStorage (reload), bukan sesi baru.
+let liveStartFromStorage = false;
 
+// Teks panel durasi: offline -> "Stream Offline", live -> "Live • HH:MM:SS"
+// Waktu mulai HANYA dari deteksi LIVE Studio (liveStartedAtMs).
 function GetLiveDurationText() {
-	let startMs = widgetStartTime;
-	const rawStart = urlParams.get("streamStartedAt");
-	if (rawStart) {
-		const timeMatch = rawStart.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-		if (timeMatch) {
-			const now = new Date();
-			const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), parseInt(timeMatch[3] || 0, 10));
-			if (startDate.getTime() > now.getTime()) {
-				startDate.setDate(startDate.getDate() - 1); // Started yesterday
-			}
-			startMs = startDate.getTime();
-		} else {
-			const parsed = Date.parse(rawStart);
-			if (!isNaN(parsed) && parsed <= Date.now()) {
-				startMs = parsed;
-			}
-		}
-	}
+	if (liveStatus !== 2) return offlineText;
+
+	const startMs = liveStartedAtMs !== null ? liveStartedAtMs : widgetStartTime;
 
 	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
 	const hours = Math.floor(elapsedSeconds / 3600);
@@ -141,6 +191,21 @@ function GetLiveDurationText() {
 	return `Live • ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
+const appLanguage = urlParams.get("language") || "id";
+
+// Mengaktifkan bahasa pilihan untuk dayjs (jika dimuat)
+if (typeof dayjs !== 'undefined') {
+	dayjs.locale(appLanguage);
+}
+
+function GetTimeNowText() {
+	const timeFormat = urlParams.get("timeFormat") || "HH:mm:ss A";
+	if (typeof dayjs !== 'undefined') {
+		return dayjs().format(timeFormat);
+	}
+	return new Date().toLocaleTimeString('id-ID');
+}
+
 // Rotate through info panels
 // Purple icons = date/time & weather, yellow icons = event-related (duration, viewers)
 const infoPanels = [
@@ -149,8 +214,11 @@ const infoPanels = [
 		icon: ALERT_ICONS.calendar, // purple calendar
 		ticks: false,
 		text: () => {
-			const now = new Date();
-			return now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+			const dateFormat = urlParams.get("dateFormat") || "dddd, DD MMMM YYYY";
+			if (typeof dayjs !== 'undefined') {
+				return dayjs().format(dateFormat);
+			}
+			return new Date().toLocaleDateString('id-ID');
 		}
 	},
 	{
@@ -180,7 +248,14 @@ const infoPanels = [
 		id: 'viewers',
 		icon: ALERT_ICONS.viewers, // yellow eye
 		ticks: false,
-		text: () => `${viewerCount ?? 0} penonton`
+		text: () => {
+			if (liveStatus !== 2) return offlineViewersText;
+			return `${FormatViewers(viewerCount ?? 0)} penonton`;
+		},
+		// ChatRD menyimpan nilai mentah di data-viewers agar bisa dijumlahkan
+		// lintas platform. Di sini belum ada gabungan, tapi pola yang sama
+		// dipakai supaya angka aslinya tidak hilang setelah diformat.
+		rawViewers: () => (liveStatus === 2 ? Math.max(0, Math.floor(Number(viewerCount) || 0)) : 0)
 	}
 ];
 
@@ -190,11 +265,68 @@ function CycleInfo() {
 	UpdateInfoText();
 }
 
-function UpdateInfoText() {
+function UpdateInfoText(animate = true) {
 	if (isAlertActive) return;
-	islandText.textContent = infoPanels[currentPanelIndex].text();
-	islandIcon.src = infoPanels[currentPanelIndex].icon;
+	ApplyInfoPanel(animate);
+}
+
+// Perbarui panel penonton TANPA animasi bounce.
+// Dipakai oleh poll deteksi live, tick per detik, dan pembaruan viewer count
+// supaya tampilan tidak berkedut terus-menerus.
+function RefreshInfoText() {
+	if (isAlertActive) return;
+	ApplyInfoPanel(false);
+}
+
+// Terapkan perubahan jumlah penonton.
+// Angka diperbarui HANYA bila panel penonton sedang tampil (index 4),
+// dan dilakukan tanpa bounce — persis perilaku ChatRD, yang menulis
+// textContent + dataset.viewers tanpa memicu animasi masuk lagi.
+function UpdateViewerCount() {
+	if (isAlertActive) return;
+
+	const panel = infoPanels[currentPanelIndex];
+	if (!panel || panel.id !== 'viewers') return; // panel lain: diam
+
+	if (typeof panel.rawViewers === 'function') {
+		islandText.dataset.viewers = String(panel.rawViewers());
+	}
+
+	const nextText = panel.text();
+	if (islandText.textContent !== nextText) {
+		islandText.textContent = nextText;
+	}
+}
+
+function ApplyInfoPanel(animate) {
+	if (isAlertActive) return;
+	const panel = infoPanels[currentPanelIndex];
+	if (!panel) return;
+
+	const nextText = panel.text();
+
+	// Mode senyap: cukup tulis ulang teks bila benar-benar berubah.
+	// Tidak menyentuh elemen lain dan tidak memicu animasi apa pun.
+	if (!animate) {
+		if (islandText.textContent !== nextText) {
+			islandText.textContent = nextText;
+		}
+		return;
+	}
+
+	// Mode rotasi / render awal: isi ulang panel + animasi bounce.
+	islandText.textContent = nextText;
+	islandIcon.src = panel.icon;
 	islandIcon.classList.remove('hidden');
+
+	// Simpan nilai mentah seperti ChatRD (span.dataset.viewers).
+	// Berguna untuk inspeksi/debug dan siap dipakai bila nanti widget
+	// perlu menjumlahkan penonton lintas platform.
+	if (typeof panel.rawViewers === 'function') {
+		islandText.dataset.viewers = String(panel.rawViewers());
+	} else if (islandText.dataset.viewers) {
+		delete islandText.dataset.viewers;
+	}
 
 	if (islandAvatar) {
 		islandAvatar.classList.add('hidden');
@@ -223,7 +355,7 @@ function StartCycleTimer() {
 		if (!isAlertActive) {
 			CycleInfo();
 		}
-	}, alertDisplayDuration);
+	}, infoCycleDuration);
 	StartSecondTicker();
 }
 
@@ -241,7 +373,8 @@ function StartSecondTicker() {
 		if (isAlertActive) return;
 		const currentPanel = infoPanels[currentPanelIndex];
 		if (currentPanel && currentPanel.ticks) {
-			islandText.textContent = currentPanel.text();
+			// Jam berdetak tiap detik: perbarui teks saja, tanpa bounce.
+			RefreshInfoText();
 		}
 	}, 1000);
 }
@@ -251,6 +384,293 @@ function StopSecondTicker() {
 		clearInterval(secondTicker);
 		secondTicker = null;
 	}
+}
+
+/////////////////////////////////////////////
+// TIKTOK LIVE STUDIO - DETEKSI STATUS LIVE //
+/////////////////////////////////////////////
+
+// Protokol Stream Deck LIVE Studio (terverifikasi di 1.35.2).
+// Port tidak tetap; LIVE Studio memilih salah satu dari daftar ini.
+const LIVE_STUDIO_PORTS = [28189, 39728, 34246, 42205, 38534, 40825, 40622];
+const LS_SOCKET_PATH = '/socket.io/';
+const LS_SOCKET_PROTOCOL = 'streamdeck_ttls_v1';
+const LS_EVENT_JOIN_ROOM = 'stream_deck/join_room';
+const LS_EVENT_SYNC_SETTINGS = 'stream_deck/sync_settings';
+
+const LS_STATUS = { offline: 0, paused: 1, live: 2 };
+const LS_POLL_INTERVAL = 2500;      // status tidak di-push, harus dipoll
+const LS_RETRY_INTERVAL = 10000;    // jeda bila belum terhubung
+const LS_STORAGE_KEY = 'geseki-live-started-at';
+const LS_MAX_AGE = 12 * 60 * 60 * 1000; // localStorage dianggap basi setelah 12 jam
+
+let lsSocket = null;
+let lsPollTimer = null;
+let lsRetryTimer = null;
+let lsEndpoint = null;
+
+// localStorage: simpan waktu mulai supaya reload OBS tidak mereset durasi.
+function LoadStoredStartMs() {
+	try {
+		const raw = localStorage.getItem(LS_STORAGE_KEY);
+		if (!raw) return null;
+		const ms = parseInt(raw, 10);
+		if (!isFinite(ms)) return null;
+		if (Date.now() - ms > LS_MAX_AGE) {
+			localStorage.removeItem(LS_STORAGE_KEY);
+			return null;
+		}
+		return ms;
+	} catch (e) {
+		return null; // localStorage bisa diblokir (mode private / OBS)
+	}
+}
+
+function SaveStartMs(ms) {
+	try {
+		localStorage.setItem(LS_STORAGE_KEY, String(ms));
+	} catch (e) {
+		console.debug('[Geseki][LiveDetect] localStorage tidak tersedia:', e);
+	}
+}
+
+function ClearStoredStartMs() {
+	try {
+		localStorage.removeItem(LS_STORAGE_KEY);
+	} catch (e) { /* abaikan */ }
+}
+
+// Terapkan perubahan status. Dipanggil tiap kali status berubah.
+// startOverrideMs: waktu mulai eksplisit (dipakai saat simulasi/uji coba).
+function ApplyLiveStatus(nextStatus, startOverrideMs) {
+	const prev = liveStatus;
+	const changed = prev !== nextStatus;
+	liveStatus = nextStatus;
+
+	if (nextStatus === LS_STATUS.live) {
+		if (startOverrideMs !== undefined && startOverrideMs !== null) {
+			// Nilai eksplisit selalu menang (dipakai untuk uji coba).
+			liveStartedAtMs = startOverrideMs;
+			liveStartFromStorage = false;
+			SaveStartMs(liveStartedAtMs);
+		} else if (liveStartedAtMs === null) {
+			// Belum punya waktu mulai -> ini sesi live baru (atau widget baru
+			// load). Pakai waktu sekarang.
+			//
+			// PENTING: cukup cek `liveStartedAtMs === null` saja. JANGAN pakai
+			// penanda tambahan seperti liveStartFromStorage di kondisi ini —
+			// penanda itu hanya untuk menandai nilai yang dipulihkan saat
+			// startup, dan menggunakannya di sini membuat poll berikutnya
+			// (tiap 2.5 detik) terus menghitung ulang waktu mulai.
+			liveStartedAtMs = Date.now();
+			liveStartFromStorage = false;
+			SaveStartMs(liveStartedAtMs);
+		}
+		// else: liveStartedAtMs sudah ada -> pertahankan, jangan pernah diubah
+		//       oleh polling. Inilah yang membuat durasi terus bertambah.
+		if (prev !== LS_STATUS.live) {
+			console.debug('[Geseki][LiveDetect] LIVE, start =', new Date(liveStartedAtMs).toLocaleString('id-ID'));
+		}
+	} else if (prev === LS_STATUS.live || liveStartFromStorage) {
+		// Live berakhir, ATAU terbukti bukan reload (status pertama = offline).
+		// Reset supaya sesi berikutnya menghitung dari nol.
+		liveStartedAtMs = null;
+		liveStartFromStorage = false;
+		ClearStoredStartMs();
+		viewerCount = null;
+		console.debug('[Geseki][LiveDetect] Tidak live, status =', nextStatus);
+	}
+
+	// Segarkan tampilan HANYA bila status benar-benar berubah.
+	// Poll berjalan tiap 2.5 detik; tanpa penjaga ini widget akan bounce
+	// terus-menerus walau statusnya tetap sama.
+	if (!changed || isAlertActive) return;
+
+	const panel = infoPanels[currentPanelIndex];
+	if (panel && (panel.id === 'duration' || panel.id === 'viewers')) {
+		// Transisi live <-> offline memang layak mendapat animasi,
+		// karena panel berpindah antara "Stream Offline" dan "Live • ...".
+		UpdateInfoText();
+	}
+}
+
+function ParseSyncSettings(data) {
+	let state = data;
+	if (typeof state === 'string') {
+		try {
+			state = JSON.parse(state);
+		} catch (e) {
+			return null;
+		}
+	}
+	if (!state || typeof state !== 'object') return null;
+	return state;
+}
+
+function PollLiveStatus() {
+	if (!lsSocket || !lsSocket.connected) return;
+	lsSocket.once(LS_EVENT_SYNC_SETTINGS, (data) => {
+		const state = ParseSyncSettings(data);
+		if (!state || state.stream_status === undefined) return;
+		ApplyLiveStatus(Number(state.stream_status));
+	});
+	lsSocket.emit(LS_EVENT_SYNC_SETTINGS);
+}
+
+function StopLivePolling() {
+	if (lsPollTimer) {
+		clearInterval(lsPollTimer);
+		lsPollTimer = null;
+	}
+	if (lsRetryTimer) {
+		clearTimeout(lsRetryTimer);
+		lsRetryTimer = null;
+	}
+	if (lsSocket) {
+		try {
+			lsSocket.removeAllListeners();
+			lsSocket.close();
+		} catch (e) { /* abaikan */ }
+		lsSocket = null;
+	}
+	lsEndpoint = null;
+}
+
+function ConnectLiveStudio(portIndex) {
+	// socket.io-client dimuat dari CDN; bila gagal, deteksi dilewati.
+	if (typeof io === 'undefined') {
+		console.debug('[Geseki][LiveDetect] socket.io-client tidak tersedia, deteksi dilewati.');
+		ScheduleLiveRetry(0);
+		return;
+	}
+
+	const ports = liveStudioPort > 0 ? [liveStudioPort] : LIVE_STUDIO_PORTS;
+	if (portIndex >= ports.length) {
+		// Tidak ada port yang menerima; coba lagi nanti (LIVE Studio mungkin belum siap).
+		ScheduleLiveRetry(portIndex);
+		return;
+	}
+
+	const port = ports[portIndex];
+	const url = `ws://127.0.0.1:${port}`;
+	let socket = null;
+
+	try {
+		socket = io(url, {
+			path: LS_SOCKET_PATH,
+			transports: ['websocket'],
+			protocols: [LS_SOCKET_PROTOCOL],
+			autoConnect: false,
+			reconnection: false,
+			timeout: 2500
+		});
+	} catch (e) {
+		console.debug(`[Geseki][LiveDetect] Gagal membuat socket port ${port}:`, e);
+		ConnectLiveStudio(portIndex + 1);
+		return;
+	}
+
+	const connectTimer = setTimeout(() => {
+		try {
+			socket.close();
+		} catch (e) { /* abaikan */ }
+		console.debug(`[Geseki][LiveDetect] Timeout port ${port}, coba port berikutnya.`);
+		ConnectLiveStudio(portIndex + 1);
+	}, 3500);
+
+	socket.once('connect', () => {
+		clearTimeout(connectTimer);
+		lsSocket = socket;
+		lsEndpoint = url;
+		console.debug(`[Geseki][LiveDetect] Terhubung ke LIVE Studio di ${url}`);
+
+		socket.emit(LS_EVENT_JOIN_ROOM);
+
+		// Baca status pertama kali, lalu poll berkala.
+		PollLiveStatus();
+		if (lsPollTimer) clearInterval(lsPollTimer);
+		lsPollTimer = setInterval(PollLiveStatus, LS_POLL_INTERVAL);
+	});
+
+	socket.once('connect_error', (err) => {
+		clearTimeout(connectTimer);
+		try {
+			socket.close();
+		} catch (e) { /* abaikan */ }
+		console.debug(`[Geseki][LiveDetect] Port ${port} menolak koneksi:`, err && err.message);
+		ConnectLiveStudio(portIndex + 1);
+	});
+
+	socket.on('disconnect', (reason) => {
+		console.debug('[Geseki][LiveDetect] Terputus:', reason);
+		if (lsPollTimer) {
+			clearInterval(lsPollTimer);
+			lsPollTimer = null;
+		}
+		if (reason !== 'io client disconnect') {
+			ScheduleLiveRetry(0);
+		}
+	});
+
+	socket.connect();
+}
+
+function ScheduleLiveRetry(portIndex) {
+	if (lsRetryTimer) clearTimeout(lsRetryTimer);
+	lsRetryTimer = setTimeout(() => {
+		lsRetryTimer = null;
+		ConnectLiveStudio(portIndex > 0 ? portIndex : 0);
+	}, LS_RETRY_INTERVAL);
+}
+
+function InitLiveDetection() {
+	if (!enableLiveDetect) {
+		// Deteksi mati: tidak ada sumber waktu mulai lain (streamStartedAt
+		// sudah dihapus). Karena itu selalu anggap live dan hitung dari
+		// widgetStartTime — durasi akan nol setiap kali OBS me-reload source.
+		console.debug('[Geseki][LiveDetect] Dinonaktifkan lewat pengaturan.');
+		liveStatus = LS_STATUS.live;
+		liveStartedAtMs = widgetStartTime;
+		UpdateInfoText();
+		return;
+	}
+
+	// Default "belum diketahui" (null), BUKAN offline.
+	// Penting: kalau status pertama yang terbaca adalah live, kita tidak bisa
+	// tahu itu reload di tengah sesi atau sesi baru. Penanda ini membedakannya
+	// dari transisi offline -> live yang benar-benar baru.
+	liveStatus = null;
+
+	// Pulihkan waktu mulai dari localStorage: ini khusus untuk kasus widget
+	// di-reload di tengah sesi live yang sama (OBS suka me-reload browser
+	// source). Akan dibuang bila ternyata ini sesi baru.
+	if (liveStartedAtMs === null) {
+		const stored = LoadStoredStartMs();
+		if (stored !== null) {
+			liveStartedAtMs = stored;
+			liveStartFromStorage = true;
+		}
+	}
+
+	ConnectLiveStudio(0);
+}
+
+// Muat socket.io-client dari CDN, lalu mulai deteksi.
+function LoadSocketIoAndDetect() {
+	if (typeof io !== 'undefined') {
+		InitLiveDetection();
+		return;
+	}
+	const script = document.createElement('script');
+	script.src = 'https://cdn.socket.io/4.7.5/socket.io.min.js';
+	script.onload = () => {
+		console.debug('[Geseki][LiveDetect] socket.io-client siap.');
+		InitLiveDetection();
+	};
+	script.onerror = () => {
+		console.debug('[Geseki][LiveDetect] Gagal memuat socket.io-client, deteksi dilewati.');
+	};
+	document.head.appendChild(script);
 }
 
 // Fetch live data in the background (standard 15-minute interval)
@@ -275,6 +695,8 @@ function InitInfoLoop() {
 	setInterval(FetchWeather, WEATHER_REFRESH_INTERVAL);
 	UpdateInfoText();
 	StartCycleTimer();
+	// Deteksi status LIVE Studio (mengisi liveStatus + liveStartedAtMs)
+	LoadSocketIoAndDetect();
 }
 
 InitInfoLoop();
@@ -286,6 +708,23 @@ InitInfoLoop();
 const alertQueue = [];
 let alertLocked = false;
 const recentAlerts = new Map();
+
+// Durasi alert saat ini, dihitung ulang setiap kali alert mulai tayang.
+// Antrean padat -> lebih cepat; antrean surut -> kembali ke alertDisplayDuration.
+function ComputeAlertDuration() {
+	// Hanya event yang MASIH MENUNGGU. Alert yang sedang tayang tidak dihitung.
+	const backlog = alertQueue.length;
+
+	if (backlog <= queueThreshold) return alertDisplayDuration;
+
+	// Interpolasi linear: threshold -> durasi normal, burstFullBacklog -> durasi minimum.
+	const span = Math.max(1, burstFullBacklog - queueThreshold);
+	const t = Math.min(1, (backlog - queueThreshold) / span);
+	const scaled = alertDisplayDuration - t * (alertDisplayDuration - alertDurationMinMs);
+
+	// Floor absolut menjaga animasi pop (0.38s) + transisi pill (0.35s).
+	return Math.max(MIN_ALERT_FLOOR_MS, Math.round(scaled));
+}
 
 function TriggerAlert(iconOrOptions, textArg, avatarArg, titleArg, subtextArg) {
 	let alertData = {};
@@ -327,7 +766,12 @@ function ProcessAlertQueue() {
 	isAlertActive = true;
 	StopCycleTimer(); // IMMEDIATELY interrupt the looping widget!
 
-	const { icon, text, title, subtext, avatar } = alertData;
+	// Dihitung SETELAH shift(): yang dihitung adalah event yang MASIH MENUNGGU.
+	// Alert yang sedang tayang diputuskan durasinya di sini dan tidak dipotong
+	// di tengah jalan, supaya animasi pop tidak ter-clip.
+	const currentAlertDuration = ComputeAlertDuration();
+
+	const { icon, text, title, subtext, avatar, type } = alertData;
 
 	// Profile picture handling
 	if (avatar && islandAvatar) {
@@ -370,14 +814,23 @@ function ProcessAlertQueue() {
 	dynamicIsland.classList.remove('alert-pop');
 	if (islandAvatar) islandAvatar.classList.remove('alert-content-pop');
 	islandText.classList.remove('bounce-in', 'alert-content-pop');
+	if (islandIcon) islandIcon.classList.remove('shake-anim');
 	if (islandSubtext) islandSubtext.classList.remove('alert-content-pop');
-	if (islandEventIcon) islandEventIcon.classList.remove('alert-content-pop');
+	if (islandEventIcon) islandEventIcon.classList.remove('alert-content-pop', 'shake-anim');
 	void dynamicIsland.offsetWidth; // Force reflow
 	dynamicIsland.classList.add('alert-pop');
 	if (islandAvatar) islandAvatar.classList.add('alert-content-pop');
 	islandText.classList.add('alert-content-pop');
 	if (islandSubtext) islandSubtext.classList.add('alert-content-pop');
 	if (islandEventIcon) islandEventIcon.classList.add('alert-content-pop');
+
+	if (type === 'gift') {
+		if (avatar && islandEventIcon) {
+			islandEventIcon.classList.add('shake-anim');
+		} else if (islandIcon) {
+			islandIcon.classList.add('shake-anim');
+		}
+	}
 
 	// Legacy #islandAlert container mirror
 	if (islandAlert) {
@@ -414,21 +867,108 @@ function ProcessAlertQueue() {
 			UpdateInfoText();
 			StartCycleTimer();
 		}
-	}, alertDisplayDuration);
+	}, currentAlertDuration);
 }
 
 // Global test helpers for preview / dev
-window.testWidget = function () {
+const testUser = 'sekisungkarak';
+const testAvatar = '../resources/sekisungkarak_avatar.jpeg';
+
+window.testFollow = function () {
+	const msg = urlParams.get("followMessage") || "followed!";
 	TriggerAlert({
-		icon: ALERT_ICONS.gift,
-		text: 'Geseki sent Galaxy x1!',
-		title: 'Geseki',
-		subtext: 'sent Galaxy x1!',
-		avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80'
+		type: 'follow',
+		icon: typeof ALERT_ICONS !== 'undefined' ? ALERT_ICONS.follow : '',
+		text: `${testUser} ${msg.replaceAll('{name}', testUser)}`,
+		title: testUser,
+		subtext: msg.replaceAll('{name}', testUser),
+		avatar: testAvatar
 	});
+};
+
+window.testSubscribe = function () {
+	const msg = urlParams.get("subscribeMessage") || "subscribed!";
+	TriggerAlert({
+		type: 'subscribe',
+		icon: typeof ALERT_ICONS !== 'undefined' ? ALERT_ICONS.subscribe : '',
+		text: `${testUser} ${msg.replaceAll('{name}', testUser)}`,
+		title: testUser,
+		subtext: msg.replaceAll('{name}', testUser),
+		avatar: testAvatar
+	});
+};
+
+window.testShare = function () {
+	const msg = urlParams.get("shareMessage") || "shared the live!";
+	TriggerAlert({
+		type: 'share',
+		icon: typeof ALERT_ICONS !== 'undefined' ? ALERT_ICONS.share : '',
+		text: `${testUser} ${msg.replaceAll('{name}', testUser)}`,
+		title: testUser,
+		subtext: msg.replaceAll('{name}', testUser),
+		avatar: testAvatar
+	});
+};
+
+window.testGift = function () {
+	const msg = urlParams.get("giftMessage") || "sent {gift} x{count}!";
+	const action = msg.replaceAll('{name}', testUser).replaceAll('{gift}', 'Galaxy').replaceAll('{count}', '1');
+	TriggerAlert({
+		type: 'gift',
+		icon: typeof ALERT_ICONS !== 'undefined' ? ALERT_ICONS.gift : '',
+		text: `${testUser} ${action}`,
+		title: testUser,
+		subtext: action,
+		avatar: testAvatar
+	});
+};
+
+window.testWidgetSelect = function(testType) {
+	if (testType === "follow") {
+		window.testFollow();
+	} else if (testType === "subscribe") {
+		window.testSubscribe();
+	} else if (testType === "share") {
+		window.testShare();
+	} else if (testType === "gift") {
+		window.testGift();
+	} else if (testType === "all") {
+		window.testFollow();
+		window.testSubscribe();
+		window.testShare();
+		window.testGift();
+	}
+};
+
+window.testWidget = function() {
+	const testType = urlParams.get("testAlertType") || "all";
+	window.testWidgetSelect(testType);
 };
 window.testAlert = TriggerAlert;
 window.ALERT_ICONS = ALERT_ICONS;
+
+// Broadcaster receiver untuk menerima test murni dari jendela Pengaturan / Tab lain (OBS dll)
+if (window.BroadcastChannel) {
+	const bc = new BroadcastChannel('geseki_island_channel');
+	bc.onmessage = function(event) {
+		if (event.data && event.data.type === 'trigger_test') {
+			window.testWidgetSelect(event.data.testType);
+		}
+	};
+}
+
+// Helper debug status live: panggil window.liveInfo() di console.
+window.liveInfo = function () {
+	return {
+		liveStatus: liveStatus,
+		arti: liveStatus === 2 ? 'LIVE' : liveStatus === 1 ? 'PAUSED' : liveStatus === 0 ? 'OFFLINE' : 'BELUM DIKETAHUI',
+		endpoint: lsEndpoint,
+		startedAtMs: liveStartedAtMs,
+		startedAt: liveStartedAtMs ? new Date(liveStartedAtMs).toLocaleTimeString('id-ID') : null,
+		viewers: viewerCount,
+		enableLiveDetect: enableLiveDetect
+	};
+};
 
 /////////////////////////
 // STREAMER.BOT CLIENT //
@@ -437,11 +977,10 @@ window.ALERT_ICONS = ALERT_ICONS;
 let streamerBotStatus = { connected: false, disconnected: false, error: false };
 let client = null;
 
-const enableStreamerbot = GetBoolParam("enableStreamerbot", true);
 const sbAddress = urlParams.get("address") || urlParams.get("streamerBotServerAddress") || "127.0.0.1";
 const sbPort = urlParams.get("port") || urlParams.get("streamerBotServerPort") || "8080";
 
-if (enableStreamerbot && typeof StreamerbotClient !== 'undefined') {
+if (typeof StreamerbotClient !== 'undefined') {
 	try {
 		client = new StreamerbotClient({
 			host: sbAddress,
@@ -484,9 +1023,9 @@ if (client) {
 		const avatar = response.data.userProfileImageUrl || response.data.profileImageUrl || response.data.avatar || '';
 		TriggerAlert({
 			icon: ALERT_ICONS.follow,
-			text: `${user} followed!`,
+			text: `${user} ${followMessage.replaceAll('{name}', user)}`,
 			title: user,
-			subtext: 'followed!',
+			subtext: followMessage.replaceAll('{name}', user),
 			avatar: avatar
 		});
 	});
@@ -498,9 +1037,9 @@ if (client) {
 		const avatar = response.data.userProfileImageUrl || response.data.profileImageUrl || response.data.avatar || '';
 		TriggerAlert({
 			icon: ALERT_ICONS.subscribe,
-			text: `${user} subscribed!`,
+			text: `${user} ${subscribeMessage.replaceAll('{name}', user)}`,
 			title: user,
-			subtext: 'subscribed!',
+			subtext: subscribeMessage.replaceAll('{name}', user),
 			avatar: avatar
 		});
 	});
@@ -512,9 +1051,9 @@ if (client) {
 		const avatar = response.data.userProfileImageUrl || response.data.profileImageUrl || response.data.avatar || '';
 		TriggerAlert({
 			icon: ALERT_ICONS.share,
-			text: `${user} shared the live!`,
+			text: `${user} ${shareMessage.replaceAll('{name}', user)}`,
 			title: user,
-			subtext: 'shared the live!',
+			subtext: shareMessage.replaceAll('{name}', user),
 			avatar: avatar
 		});
 	});
@@ -525,9 +1064,10 @@ if (client) {
 		const user = response.data.userName || response.data.user || 'Someone';
 		const gift = response.data.giftName || 'a gift';
 		const repeatCount = response.data.repeatCount || 1;
-		const action = `sent ${gift}${repeatCount > 1 ? ` x${repeatCount}` : ''}!`;
+		const action = giftMessage.replaceAll('{name}', user).replaceAll('{gift}', gift).replaceAll('{count}', repeatCount);
 		const avatar = response.data.userProfileImageUrl || response.data.profileImageUrl || response.data.avatar || '';
 		TriggerAlert({
+			type: 'gift',
 			icon: ALERT_ICONS.gift,
 			text: `${user} ${action}`,
 			title: user,
@@ -548,7 +1088,7 @@ let tikfinityWebsocket = null;
 let indofinityWebsocket = null;
 
 async function tikfinityConnection() {
-	if (!showTiktok || (tiktokService !== 'tikfinity' && tiktokService !== 'both')) {
+	if (tiktokService !== 'tikfinity' && tiktokService !== 'both') {
 		return null;
 	}
 
@@ -628,7 +1168,7 @@ async function tikfinityConnection() {
 }
 
 async function indofinityConnection() {
-	if (!showTiktok || (tiktokService !== 'indofinity' && tiktokService !== 'both')) {
+	if (tiktokService !== 'indofinity' && tiktokService !== 'both') {
 		return null;
 	}
 
@@ -707,6 +1247,8 @@ async function indofinityConnection() {
 	return connect();
 }
 
+const firstChatters = new Set();
+
 function handleTikTokEvent(event, tiktokData, source) {
 	if (!tiktokData) return;
 
@@ -714,13 +1256,31 @@ function handleTikTokEvent(event, tiktokData, source) {
 	const avatar = tiktokData.profilePictureUrl || tiktokData.profilePicture || tiktokData.avatarThumb || tiktokData.user?.profilePictureUrl || '';
 
 	switch (event) {
+		case 'chat': {
+			if (!enableFirstChatter) return;
+			const userId = tiktokData.userId;
+			if (!userId) return;
+
+			if (!firstChatters.has(userId)) {
+				firstChatters.add(userId);
+				const message = tiktokData.comment || tiktokData.msg || tiktokData.text || '';
+
+				TriggerAlert({
+					icon: 'https://img.icons8.com/fluency-systems-filled/96/FFFFFF/chat.png',
+					title: userName,
+					subtext: message,
+					text: `${userName}: ${message}`,
+					avatar: avatar
+				});
+			}
+			break;
+		}
+
 		case 'roomUser': {
 			if (tiktokData.viewerCount !== undefined) {
 				viewerCount = Number(tiktokData.viewerCount);
-				// If viewer count panel is active and no alert is showing, update text immediately
-				if (currentPanelIndex === 3 && !isAlertActive) {
-					UpdateInfoText();
-				}
+				// Angka disimpan; yang menggambar ke layar adalah rotasi panel.
+				UpdateViewerCount();
 			}
 			break;
 		}
@@ -734,8 +1294,9 @@ function handleTikTokEvent(event, tiktokData, source) {
 			const giftName = tiktokData.giftName || 'a gift';
 			const repeatCount = tiktokData.repeatCount || 1;
 			const giftIcon = tiktokData.giftPictureUrl || ALERT_ICONS.gift;
-			const action = `sent ${giftName}${repeatCount > 1 ? ` x${repeatCount}` : ''}!`;
+			const action = giftMessage.replaceAll('{name}', userName).replaceAll('{gift}', giftName).replaceAll('{count}', repeatCount);
 			TriggerAlert({
+				type: 'gift',
 				icon: giftIcon,
 				text: `${userName} ${action}`,
 				title: userName,
@@ -749,9 +1310,9 @@ function handleTikTokEvent(event, tiktokData, source) {
 			if (!enableSubscribe) return;
 			TriggerAlert({
 				icon: ALERT_ICONS.subscribe,
-				text: `${userName} subscribed!`,
-				title: userName,
-				subtext: 'subscribed!',
+				text: `${userName} ${subscribeMessage.replaceAll('{name}', userName)}`,
+			title: userName,
+			subtext: subscribeMessage.replaceAll('{name}', userName),
 				avatar: avatar
 			});
 			break;
@@ -761,9 +1322,9 @@ function handleTikTokEvent(event, tiktokData, source) {
 			if (!enableFollow) return;
 			TriggerAlert({
 				icon: ALERT_ICONS.follow,
-				text: `${userName} followed!`,
-				title: userName,
-				subtext: 'followed!',
+				text: `${userName} ${followMessage.replaceAll('{name}', userName)}`,
+			title: userName,
+			subtext: followMessage.replaceAll('{name}', userName),
 				avatar: avatar
 			});
 			break;
@@ -773,9 +1334,9 @@ function handleTikTokEvent(event, tiktokData, source) {
 			if (!enableShare) return;
 			TriggerAlert({
 				icon: ALERT_ICONS.share,
-				text: `${userName} shared the live!`,
-				title: userName,
-				subtext: 'shared the live!',
+				text: `${userName} ${shareMessage.replaceAll('{name}', userName)}`,
+			title: userName,
+			subtext: shareMessage.replaceAll('{name}', userName),
 				avatar: avatar
 			});
 			break;

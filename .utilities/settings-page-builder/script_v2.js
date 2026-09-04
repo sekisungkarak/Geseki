@@ -17,6 +17,8 @@ if (!widgetURL) {
 }
 const showUnmuteIndicator = GetBooleanParam("showUnmuteIndicator", false);
 
+const bc = window.BroadcastChannel ? new BroadcastChannel('geseki_island_channel') : null;
+
 // Page elements
 const settingsPanel = document.getElementById('settingsPanel');
 const widgetPreview = document.getElementById('widgetPreview');
@@ -138,7 +140,7 @@ copyUrlButton.addEventListener('click', async () => {
         const url = BuildWidgetURL();
         const success = await CopyToClipboard(url);
         if (success) {
-            copyUrlButton.innerHTML = '<i class="ri-check-line"></i> Copied!';
+            copyUrlButton.innerHTML = 'Copied!';
             copyUrlButton.classList.add('copied');
 
             setTimeout(() => {
@@ -171,6 +173,9 @@ function LoadJSON(settingsJson) {
 
             // Clear the settings panel
             settingsPanel.innerHTML = '';
+            
+            // Clear category map so it regenerates properly on reload/reset
+            window.__categoryMap = {};
 
             const groupedSettings = {};
 
@@ -291,7 +296,60 @@ function LoadJSON(settingsJson) {
                     section.appendChild(configRow);
                 });
 
-                settingsPanel.appendChild(section);
+                // Check category of this group
+                const firstSetting = groupedSettings[groupName][0];
+                const categoryName = firstSetting.category;
+
+                if (categoryName) {
+                    if (!window.__categoryMap) window.__categoryMap = {};
+
+                    if (!window.__categoryMap[categoryName]) {
+                        const catSection = document.createElement('wa-details');
+                        catSection.classList.add('section', 'category-section');
+                        
+                        // Is category expanded?
+                        let catIsOpen = false;
+                        if (data.categories && data.categories[categoryName] && data.categories[categoryName].open !== undefined) {
+                            catIsOpen = Boolean(data.categories[categoryName].open);
+                        } else {
+                            catIsOpen = true;
+                        }
+                        if (catIsOpen) catSection.setAttribute('open', '');
+
+                        const catHeader = document.createElement('span');
+                        catHeader.classList.add('header');
+                        catHeader.setAttribute('slot', 'summary');
+
+                        const catTitle = document.createElement('span');
+                        catTitle.classList.add('title');
+                        const catIcon = document.createElement('i');
+                        catIcon.className = data.categories?.[categoryName]?.icon || 'ri-folder-3-fill';
+                        catTitle.appendChild(catIcon);
+                        catTitle.appendChild(document.createTextNode(categoryName));
+                        catHeader.appendChild(catTitle);
+                        catSection.appendChild(catHeader);
+
+                        // Category styles so it stands out and indents children
+                        catSection.style.border = '1px solid var(--border-color)';
+                        catSection.style.marginBottom = '20px';
+                        catSection.style.background = 'var(--panel-color)';
+
+                        settingsPanel.appendChild(catSection);
+                        window.__categoryMap[categoryName] = catSection;
+                    }
+
+                    // Nest the group section inside the category section
+                    // Add indentation styles
+                    section.style.border = 'none';
+                    section.style.borderTop = '1px solid var(--border-color)';
+                    section.style.marginBottom = '0';
+                    section.style.borderRadius = '0';
+                    section.style.boxShadow = 'none';
+                    window.__categoryMap[categoryName].appendChild(section);
+                } else {
+                    settingsPanel.appendChild(section);
+                }
+
                 groupIndex++;
             }
 
@@ -413,6 +471,19 @@ function BuildInput(setting) {
             value = Number(inputElement.value);
         else
             value = inputElement.value;
+
+        // Custom override for Auto Test Dropdown: trigger instantly without reload
+        if (setting.id === 'testAlertType') {
+            if (value && value !== 'none') {
+                try {
+                    widgetPreview.contentWindow.testWidgetSelect(value);
+                    if (bc) bc.postMessage({ type: 'trigger_test', testType: value });
+                } catch (e) {
+                    console.error("Test trigger failed", e);
+                }
+            }
+            return; // Skip save & refresh
+        }
 
         settingsMap.set(setting.id, value);
         SaveSettingsToStorage();

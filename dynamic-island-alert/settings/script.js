@@ -13,7 +13,7 @@ if (baseURL.endsWith("index.html"))
 if (!baseURL.endsWith("/"))
 	baseURL += "/";
 
-settingsJSON = "?settingsJson=" + baseURL + "settings.json";
+settingsJSON = "?v=4&settingsJson=" + baseURL + "settings.json";
 
 let widgetURL = "&widgetURL=" + baseURL.replace(/\/settings\/?$/, "/index.html");
 
