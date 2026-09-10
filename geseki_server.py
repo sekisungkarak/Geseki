@@ -24,21 +24,18 @@ class RelayServer(SimpleHTTPRequestHandler):
         if self.path.startswith("/poll_test"):
             self.send_response(200)
             self.end_headers()
-            # Long-polling loop (max 10 seconds per request)
+            # Long-polling: maksimal 10 detik per request
             for _ in range(20):
                 if trigger_queue:
-                    # Pop the event and send it
                     self.wfile.write(trigger_queue.pop(0).encode('utf-8'))
                     return
                 time.sleep(0.5)
-            # If nothing happens, return empty string
             self.wfile.write(b"")
             return
-            
-        # Serve static files as usual
+
         return super().do_GET()
 
-    # Suppress normal logging for the poll to avoid terminal spam
+    # Sembunyikan log poll agar terminal tidak spam
     def log_message(self, format, *args):
         if 'poll_test' not in args[0]:
             super().log_message(format, *args)

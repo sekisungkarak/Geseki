@@ -10,12 +10,11 @@ const weatherLocation = urlParams.get("weatherLocation") || "Jakarta";
 // Durasi alert (detik -> ms). Dipakai HANYA untuk alert.
 const alertDisplayDuration = GetIntParam("alertDuration", 4) * 1000;
 
-// Durasi rotasi panel info (tanggal / jam / durasi / cuaca / penonton). Terpisah dari
-// alertDisplayDuration supaya antrean padat tidak mempercepat putaran info.
+// Durasi rotasi panel info. Terpisah dari alertDisplayDuration agar antrean padat tidak mempercepat rotasi.
 const infoCycleDuration = GetIntParam("infoDuration", 4) * 1000;
 
-// ---- Durasi alert dinamis saat antrean padat ----
-// Antrean = event yang MASIH MENUNGGU (alertQueue.length), tidak termasuk alert yang tayang.
+// Durasi alert menyusut saat antrean padat. Yang dihitung = event yang MASIH
+// MENUNGGU (alertQueue.length), bukan alert yang sedang tayang.
 const queueThreshold = GetIntParam("queueThreshold", 2);        // <= ini -> pakai alertDisplayDuration
 const alertDurationMinMs = GetFloatParam("alertDurationMin", 1.5) * 1000;
 const burstFullBacklog = GetIntParam("burstFullBacklog", 6);    // backlog >= ini -> durasi minimum
@@ -23,16 +22,14 @@ const burstFullBacklog = GetIntParam("burstFullBacklog", 6);    // backlog >= in
 // Floor absolut: animasi pop 0.38s + transisi pill 0.35s harus sempat selesai.
 const MIN_ALERT_FLOOR_MS = 1000;
 
-// Durasi alert lagu baru (songchange): ikut setting "Alert Duration (seconds)"
-// (alertDisplayDuration). URL param musicAlertDuration = override legacy.
+// Durasi alert song change mengikuti setting "Alert Duration (seconds)".
+// URL param musicAlertDuration tetap dihormati sebagai override legacy.
 const musicAlertDuration = GetIntParam("musicAlertDuration", 4) * 1000;
 const useLegacyMusicDuration = urlParams.has("musicAlertDuration");
 
-// Durasi alert musik dinamis: SELALU mengikuti setting "Alert Duration
-// (seconds)" — tidak pernah ditunggu sampai marquee selesai.
+// Durasi alert musik: sama dengan alert lain, tidak pernah menunggu marquee selesai.
 function ComputeMusicAlertDuration(alertData) {
-	// Basis: sama dengan alert lain (setting + penyusutan saat antrean padat),
-	// kecuali URL param musicAlertDuration dipakai (legacy).
+	// Kecuali URL param musicAlertDuration dipakai (legacy).
 	return useLegacyMusicDuration ? musicAlertDuration : ComputeAlertDuration();
 }
 
@@ -51,16 +48,16 @@ if (font) {
 // Custom content size untuk teks & ikon (opsi "Content Size" di settings)
 let contentSize = GetFloatParam("contentSize", 20);
 if (contentSize && contentSize > 0) {
-	// Clamp 10-100 untuk menanggulangi input manual via UI
+	// Clamp 10..100 untuk input manual lewat UI.
 	contentSize = Math.max(10, Math.min(100, contentSize));
-	// Baseline aslinya adalah font ukuran 13px (= scale 1.0)
+	// Baseline: font 13px = scale 1.0.
 	const scale = contentSize / 13;
 	document.documentElement.style.setProperty('--island-font-size', contentSize + 'px');
 	document.documentElement.style.setProperty('--island-icon-ambient', Math.round(20 * scale) + 'px');
 	document.documentElement.style.setProperty('--island-icon-alert', Math.round(24 * scale) + 'px');
 		document.documentElement.style.setProperty('--island-avatar-size', Math.round(38 * scale) + 'px');
 	
-				// Pertambahan padding dikecilkan supaya UI tetap compact.
+				// Pelebaran padding dikecilkan agar pill tetap compact.
 		const extraPadX = Math.max(0, (contentSize - 13) * 0.4);
 		const extraPadY = Math.max(0, (contentSize - 13) * 0.35);
 		document.documentElement.style.setProperty('--island-padding-x', Math.round(20 + extraPadX) + 'px');
@@ -69,7 +66,7 @@ if (contentSize && contentSize > 0) {
 		document.documentElement.style.setProperty('--island-alert-padding-y', Math.round(12 + extraPadY) + 'px');
 }
 
-// TikTok parameters
+// TikTok parameters.
 const tiktokService = (urlParams.get("tiktokService") || "both").toLowerCase(); // 'both', 'tikfinity', 'indofinity', 'none'
 const tikfinityPort = GetIntParam("tikfinityPort", 21213);
 const indofinityPort = GetIntParam("indofinityPort", 62024);
@@ -103,12 +100,11 @@ const enableDynamicBig = GetBoolParam("enableDynamicStyleBig", true);
 const SMTC_BRIDGE_PORT = GetIntParam("smtcBridgePort", 5000);
 const SMTC_BRIDGE_URL = `http://127.0.0.1:${SMTC_BRIDGE_PORT}/now-playing`;
 
-// Inisialisasi Audio Notifikasi
-const alertAudio = new Audio("../resources/sfx/notification.mp3");
-// Turunkan volume karena aslinya sfx ini cukup keras (sesuaikan kalau kurang)
+// Path ../../ karena script ini di subfolder obs/.
+const alertAudio = new Audio("../../resources/sfx/notification.mp3");
 alertAudio.volume = 0.5;
 
-// Konstanta status playback Windows SMTC
+// Konstanta Windows SMTC API.
 const PlaybackStatus = Object.freeze({
 	CLOSED: 0,   // Engine uninitialized or empty
 	OPENED: 1,   // Pipeline loaded but idling
@@ -119,6 +115,12 @@ const PlaybackStatus = Object.freeze({
 });
 
 let nowPlayingData = {
+	_seeded: false,
+	// Kunci render terakhir panel musik; mencegah render ulang tiap tick.
+	_lastRenderKey: "",
+	// Posisi (ms) saat lagu dijeda; null bila play / tidak ada lagu.
+	// Dipakai label "Paused • m:ss".
+	pausedAtMs: null,
 	albumArt: "",
 	isPlaying: false,
 	title: "Unknown",
@@ -126,26 +128,14 @@ let nowPlayingData = {
 	lightVibrant: "#8A2BE2",
 	palette: {},
 	_lastSongKey: "",
-	// [Seed] true setelah bacaan aktif pertama - mencegah alert song change muncul
-	// begitu bridge tersambung / widget di-refresh.
-	_seeded: false,
-	// Kunci render terakhir panel musik; mencegah render ulang tiap tick.
-	_lastRenderKey: "",
-	// Posisi (ms) saat lagu dijeda; null bila play / tidak ada lagu.
-	// Dipakai label "Paused • m:ss" pada panel musik versi pause.
-	pausedAtMs: null,
-	// Identitas lagu TANPA thumbnail: penentu ganti lagu harus kebal terhadap artwork
-	// yang datang terlambat.
-	_lastSongId: "",
-	// Identitas lagu yang alert-nya DITUNDA karena artwork belum ada. Alert song change
-	// menunggu thumbnail; begitu artwork tiba, alert ditembak sekali.
+	// Lagu yang alert-nya DITUNDA sampai artwork tiba (tanpa placeholder).
 	_pendingSongAlert: null,
-	// [ANTI DOBEL] Lagu yang SUDAH ditembak alert-nya: satu songId = satu alert. Mencegah
-	// invocation ApplyNowPlayingData yang overlap menembak ulang lagu yang sama.
+	// [ANTI DOBEL] Penjaga absolut: satu songId = satu alert. currentSongKey
+	// menyertakan artwork yang bisa berubah antar fetch, jadi key saja tidak cukup.
 	_lastAlertedSongId: ""
 };
 
-// Pastikan Vibrant.js ter-load, lalu ambil palet hex dari URL gambar.
+// Muat Vibrant.js bila belum ada, lalu ekstrak palet hex dari URL gambar.
 async function GetAccentPalette(imageUrl) {
 	// 1. Dynamic Loader: Load Vibrant.js
 	if (typeof Vibrant === 'undefined') {
@@ -182,8 +172,8 @@ async function GetAccentPalette(imageUrl) {
 	});
 }
 
-// Cache palet per-URL artwork: tanpa cache, warna yang sama diekstrak ulang tiap tick
-// (boros dan bikin wave berkedut).
+// Cache palet per-URL artwork: GetAccentPalette di-await tiap tick, jadi tanpa
+// cache warna yang sama diekstrak ulang tiap 2 detik.
 const accentPaletteCache = new Map();
 async function GetAccentPaletteCached(imageUrl) {
 	if (!imageUrl) return { Vibrant: "#8A2BE2" };
@@ -204,8 +194,7 @@ async function GetAccentPaletteCached(imageUrl) {
 // HELPERS //
 /////////////
 
-// Hitung panjang string per grapheme cluster supaya aturan marquee adil untuk
-// emoji, kanji, Arab, Devanagari, dll.
+// Hitung panjang per grapheme cluster: emoji, kanji, Arab, dll = 1 karakter tampilan.
 function GetGraphemeCount(str) {
 	if (!str) return 0;
 	if (typeof Intl !== 'undefined' && Intl.Segmenter) {
@@ -249,8 +238,8 @@ function FormatDuration(ms) {
 	return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-// Format angka penonton: >= 1.000.000 -> "1.2M", >= 1.000 -> "1.5K", di bawah itu apa
-// adanya. Format compact menjaga pill tidak melebar.
+// Format compact: >= 1.000.000 -> "1.2M", >= 1.000 -> "1.5K". Angka panjang
+// bikin pill melebar.
 function FormatViewers(count) {
 	let n = Number(count);
 	if (!isFinite(n) || isNaN(n) || n < 0) return '0';
@@ -296,16 +285,15 @@ if (verticalAlign === "center") {
 document.documentElement.style.setProperty('--base-transform', baseTransform);
 dynamicIsland.style.transform = baseTransform;
 
-// Default kini "glass" (Liquid Glass) - harus sama dengan defaultValue widgetStyle di
-// settings.json, kalau tidak widget tanpa param akan tampil Solid Black.
+// Default "glass" harus sama dengan defaultValue widgetStyle di settings.json,
+// kalau tidak widget tanpa param tampil Solid Black.
 if ((urlParams.get("widgetStyle") || "glass") === "solid") {
 	dynamicIsland.classList.add("style-solid");
 }
 const islandAvatar = document.getElementById('islandAvatar');
 const islandIcon = document.getElementById('islandIcon');
 const islandIconWrap = document.getElementById('islandIconWrap');
-// Sinkronkan visibilitas wrapper dengan ikon: event TikTok memakai avatar, bukan ikon,
-// jadi slot 20px wrapper tidak boleh dipesan.
+// Sembunyikan wrapper saat ikon disembunyikan (event TikTok pakai avatar).
 const SyncIconWrapHidden = () => {
 	if (!islandIconWrap || !islandIcon) return;
 	islandIconWrap.classList.toggle('hidden', islandIcon.classList.contains('hidden'));
@@ -318,28 +306,19 @@ const islandAlert = document.getElementById('islandAlert');
 const alertIcon = document.getElementById('alertIcon');
 const alertText = document.getElementById('alertText');
 
-// CATATAN OBS: OBS 32.2.2 memakai CEF Chromium 127, yang belum mendukung
-// `interpolate-size: allow-keywords` (baru Chromium 129). Transisi lebar pill
-// (`width: max-content`) karena itu tidak berjalan di OBS - lebar langsung lompat,
-// hanya tinggi yang morph. Keterbatasan engine, bukan bug kode.
-
 /////////////////////////////////////////
 // GESER WIDGET (hanya mode pratinjau) //
 /////////////////////////////////////////
 
-// Geser widget hanya di mode pratinjau: drag aktif bila URL memuat `dragPreview=1`
-// (ditambahkan settings builder). Browser source OBS tidak memakai param itu, jadi
-// widget tetap statis saat tayang. Posisi sengaja tidak disimpan.
-// Pergeseran memakai margin, bukan transform: transform sudah dipakai
-// --base-transform untuk penskalaan & perataan pill.
+// Drag hanya aktif bila URL memuat dragPreview=1 (disisipkan settings builder),
+// jadi tidak pernah aktif di OBS. Posisi sengaja tidak disimpan.
+// Implementasi Pointer Events sendiri agar tidak menambah dependensi.
 (function initPreviewDrag() {
 	if (!urlParams.has('dragPreview')) return;
 	if (!dynamicIsland) return;
 
-	// -- TIDAK MENGGANTI LEFT/TOP/BOTTOM --
-	// Mengubah posisi ke absolut px merusak `left: 50%` + translateX(-50%) bawaan CSS,
-	// sehingga animasi pelebaran/penyusutan pill kacau. Drag HANYA mengatur margin;
-	// posisi dasar dari CSS tidak disentuh.
+	// Drag HANYA mengatur margin. Menimpa left/top merusak `left: 50%` +
+	// translateX(-50%) bawaan CSS dan bikin animasi pelebaran pill kacau.
 	let startX = 0, startY = 0;
 	let originMarginX = 0, originMarginY = 0;
 	let pendingX = 0, pendingY = 0, rafId = 0, dragging = false;
@@ -350,7 +329,7 @@ const alertText = document.getElementById('alertText');
 		// Get viewport dimensions
 		const vw = window.innerWidth;
 		const vh = window.innerHeight;
-		// Perkiraan seberapa jauh margin bisa digeser, dari rect saat ini.
+		// Batas margin, diaproksimasi dari rect saat ini.
 		const marginX = parseFloat(dynamicIsland.style.marginLeft) || 0;
 		const marginY = parseFloat(dynamicIsland.style.marginTop) || 0;
 		const limitLeft = marginX - r.left;
@@ -410,18 +389,15 @@ const alertText = document.getElementById('alertText');
 	dynamicIsland.style.userSelect = 'none';
 	dynamicIsland.style.touchAction = 'none'; // cegah scroll ikut bergerak
 
-	// -- Ringankan SELAMA drag, pulihkan SETELAHNYA --
-	// `transition: all 0.5s` membuat pill mengejar kursor, dan backdrop-filter
-	// dihitung ulang tiap frame saat digeser. Keduanya di-override saat drag, lalu
-	// dihapus sesudahnya supaya aturan stylesheet berlaku kembali.
+	// Selama drag, matikan transition (pill cuma mengejar kursor) dan
+	// backdrop-filter (dihitung ulang tiap frame). Dihapus setelah drag.
 	const mulailahDragRingan = () => {
 		dynamicIsland.style.transition = 'none';
 		dynamicIsland.style.backdropFilter = 'blur(8px)';
 		dynamicIsland.style.webkitBackdropFilter = 'blur(8px)';
 	};
 
-	// Pulihkan: HAPUS override inline supaya aturan stylesheet berlaku kembali.
-	// Menyetel nilai computed justru mengunci nilai itu dan mematikan transisi pill.
+	// Hapus override inline. Menyetel ke nilai computed justru mengunci nilainya.
 	const restoreAfterDrag = () => {
 		dynamicIsland.style.removeProperty('transition');
 		dynamicIsland.style.removeProperty('backdrop-filter');
@@ -459,8 +435,7 @@ const ALERT_ICONS = {
 
 let weatherData = null;
 let viewerCount = null;
-let currentPanelIndex = 0;
-let cycleTimer = null;
+let currentPanelIndex = 0;let cycleTimer = null;
 let secondTicker = null;
 let isAlertActive = false;
 const widgetStartTime = Date.now();
@@ -473,7 +448,7 @@ let liveStartedAtMs = null;
 // Penanda: waktu mulai berasal dari localStorage (reload), bukan sesi baru.
 let liveStartFromStorage = false;
 
-// Teks panel durasi: offline -> "Stream Offline", live -> "Live - HH:MM:SS".
+// Teks panel durasi: offline -> "Stream Offline", live -> "Live • HH:MM:SS"
 // Waktu mulai HANYA dari deteksi LIVE Studio (liveStartedAtMs).
 function GetLiveDurationText() {
 	if (liveStatus !== 2) return offlineText;
@@ -504,18 +479,17 @@ function GetTimeNowText() {
 	return new Date().toLocaleTimeString('id-ID');
 }
 
-// Rotate through info panels
-// Purple icons = date/time & weather, yellow icons = event-related (duration, viewers)
-// Ada lagu yang bisa ditampilkan? Pause TETAP dihitung ada (panel musik punya
-// tampilan khusus pause). Hanya false bila bridge putus / metadata kosong.
-// -- Persistensi state pause --
-// Saat reload, nowPlayingData di-reset padahal lagu masih dijeda. Simpan ke
-// localStorage supaya panel musik langsung tampil mode pause setelah reload.
+// Rotate through info panels.
+// Ikon ungu = date/time & weather; kuning = event (duration, viewers).
+// Panel musik tetap dihitung ada saat pause; false hanya bila bridge putus /
+// metadata kosong.
+// ── Persistensi state pause ──
+// Reload mereset nowPlayingData padahal lagu masih dijeda -> simpan ke
+// localStorage agar panel musik langsung tampil mode pause.
 const PAUSE_STORAGE_KEY = 'geseki-paused-state';
 
-// Metadata lagu terakhir yang VALID (bukan "Unknown"), disimpan terpisah supaya
-// judul/artis tidak pernah tertimpa "Unknown" - kalau itu terjadi
-// HasPlayableTrack() jadi false dan panel musik di-skip saat reload.
+// Metadata lagu valid terakhir disimpan terpisah agar judul/artis tidak
+// tertimpa "Unknown" — itu bikin HasPlayableTrack() false dan panel di-skip.
 function SaveTrackMeta() {
 	if (!HasPlayableTrack()) return;   // jangan simpan metadata kosong
 	try {
@@ -532,7 +506,7 @@ function SaveTrackMeta() {
 function SavePauseState() {
 	try {
 		if (nowPlayingData.pausedAtMs === null) {
-			// Keluar dari pause: hapus posisi, TAPI pertahankan metadata lagu terakhir.
+			// Keluar dari pause: hapus posisi, pertahankan metadata lagu terakhir.
 			const raw = localStorage.getItem(PAUSE_STORAGE_KEY);
 			if (!raw) return;
 			const st = JSON.parse(raw);
@@ -563,8 +537,7 @@ function LoadPauseState() {
 		if (st.title && st.title !== 'Unknown') nowPlayingData.title = st.title;
 		if (st.artist && st.artist !== 'Unknown') nowPlayingData.artist = st.artist;
 		if (st.art) nowPlayingData.albumArt = st.art;
-		// Pulihkan warna palet: kalau tidak, wave icon & progress bar kembali ke ungu
-		// default sampai palet diekstrak ulang.
+		// Pulihkan palet agar wave icon & progress bar tidak balik ke ungu #8A2BE2.
 		if (st.lv) {
 			nowPlayingData.lightVibrant = st.lv;
 			const fill = document.querySelector('.scrub-fill');
@@ -581,9 +554,8 @@ function HasPlayableTrack() {
 	return true;
 }
 
-// Apakah provider TikTok (TikFinity / IndoFinity) sedang terhubung. Panel viewer
-// count memakai ini sebagai sumber kebenaran: selama terhubung, angka penonton
-// dari event roomUser selalu valid - tidak perlu menunggu status live.
+// Selama provider terhubung, angka penonton dari event roomUser dianggap
+// valid tanpa menunggu status live (sumber terpisah yang bisa mati).
 function IsTikTokProviderConnected() {
 	return Boolean(
 		(typeof tikFinityStatus !== 'undefined' && tikFinityStatus.connected) ||
@@ -632,25 +604,23 @@ const infoPanels = [
 		icon: ALERT_ICONS.viewers, // yellow eye
 		ticks: false,
 		text: () => {
-			// Provider terhubung = angka penonton valid, lewati liveStatus (sumber terpisah).
+			// Provider terhubung = angka penonton valid, jangan tunggu liveStatus.
 			if (!IsTikTokProviderConnected() && liveStatus !== 2) return offlineViewersText;
 			const n = FormatViewers(viewerCount ?? 0);
-			// Ikuti pengaturan Language global (appLanguage): id = "penonton",
-			// en = "viewers". Tidak ada default terpisah.
+			// Label mengikuti appLanguage: id = "penonton", en = "viewers".
 			const word = appLanguage === 'en' ? 'viewers' : 'penonton';
 			return `${n} ${word}`;
 		},
-		// Simpan nilai mentah di data-viewers supaya angka aslinya tidak hilang setelah diformat.
+		// Nilai mentah disimpan di data-viewers agar tidak hilang setelah diformat.
 		rawViewers: () => ((IsTikTokProviderConnected() || liveStatus === 2)
 			? Math.max(0, Math.floor(Number(viewerCount) || 0))
 			: 0)
 	},
 	{
 		id: 'music',
-		// Jangan tayangkan panel musik bila tidak ada lagu yang benar-benar diputar: pause
-		// TETAP tayang (tampilan khusus: album art + overlay pause), tapi di-skip bila
-		// bridge putus / metadata kosong. [NO FALLBACK] bila artwork tidak ada, panel musik
-		// tidak tayang sama sekali - tidak ada ikon pengganti.
+		// Panel musik tayang saat play & pause, tapi di-skip bila tidak ada lagu
+		// (bridge putus / metadata kosong) atau artwork kosong —
+		// [NO FALLBACK] tidak ada ikon pengganti.
 		skip: () => !HasPlayableTrack() || !nowPlayingData.albumArt,
 		icon: () => nowPlayingData.albumArt,
 		rightIcon: () => {
@@ -658,19 +628,17 @@ const infoPanels = [
 			return `data:image/svg+xml;utf8,%3Csvg%20fill%3D%22${hexStr}%22%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Crect%20x%3D%222%22%20y%3D%229%22%20width%3D%225%22%20height%3D%226%22%20rx%3D%222%22%3E%3Canimate%20attributeName%3D%22height%22%20values%3D%226%3B16%3B6%22%20begin%3D%220s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3Canimate%20attributeName%3D%22y%22%20values%3D%229%3B4%3B9%22%20begin%3D%220s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3C%2Frect%3E%3Crect%20x%3D%229%22%20y%3D%223%22%20width%3D%225%22%20height%3D%2218%22%20rx%3D%222%22%3E%3Canimate%20attributeName%3D%22height%22%20values%3D%2218%3B8%3B18%22%20begin%3D%220.2s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3Canimate%20attributeName%3D%22y%22%20values%3D%223%3B8%3B3%22%20begin%3D%220.2s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3C%2Frect%3E%3Crect%20x%3D%2216%22%20y%3D%227%22%20width%3D%225%22%20height%3D%2210%22%20rx%3D%222%22%3E%3Canimate%20attributeName%3D%22height%22%20values%3D%2210%3B18%3B10%22%20begin%3D%220.4s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3Canimate%20attributeName%3D%22y%22%20values%3D%227%3B3%3B7%22%20begin%3D%220.4s%22%20dur%3D%221s%22%20repeatCount%3D%22indefinite%22%2F%3E%3C%2Frect%3E%3C%2Fsvg%3E`;
 		},
 		ticks: true,
-		// Marquee berdasarkan lebar piksel nyata, bukan hitungan karakter: teks melebihi
-		// kapasitas pill -> hidupkan teks berjalan.
+		// Marquee dipicu lebar piksel nyata, bukan jumlah karakter (cegah scroll terbalik).
 		isMarquee: () => MeasureIslandTextWidth(musicText()) > MARQUEE_MAX_WIDTH,
-		// Satu jalur teks: play = judul • artis; pause = "Paused • m:ss". Perbedaan pause
-		// hanya di sini (dan overlay ikon di CSS).
+		// Satu jalur teks: play = judul • artis; pause = "Paused • m:ss".
 		text: () => (nowPlayingData.pausedAtMs !== null
 			? 'Paused • ' + formatTimeMs(nowPlayingData.pausedAtMs)
 			: musicText()),
 	}
 ];
 
-// Urutan rotasi info (settings: infoRotationOrder). Panel yang tidak dipilih
-// dikeluarkan dari rotasi sama sekali.
+// Urutan rotasi info (settings: infoRotationOrder).
+// Daftar id panel yang BOLEH tampil; yang tidak dipilih dikeluarkan dari rotasi.
 (function ApplyInfoRotationOrder() {
 	const raw = urlParams.get('infoRotationOrder');
 	if (!raw) return;
@@ -694,8 +662,7 @@ const infoPanels = [
 
 // Teks panel musik (judul + artist)
 function musicText() {
-	// [FIX] Yang menentukan ada/tidaknya lagu adalah metadata, bukan status play: dulu
-	// gerbangnya isPlaying, jadi saat pause teks berubah jadi "Tidak ada lagu difilter".
+	// Yang menentukan ada/tidaknya lagu adalah metadata, bukan status play.
 	if (HasPlayableTrack()) {
 		const separator = nowPlayingData.artist && nowPlayingData.title ? ' • ' : '';
 		return `${nowPlayingData.title}${separator}${nowPlayingData.artist}`;
@@ -703,13 +670,11 @@ function musicText() {
 	return 'Tidak ada lagu difilter';
 }
 
-// Lebar maksimum teks pill sebelum marquee aktif: disamakan dengan panel tanggal
-// (panel terpanjang) supaya pill musik tidak pernah lebih lebar dari panel info lain.
+// Batas marquee = lebar teks panel date (panel terpanjang) saat ini.
 function ComputeMarqueeMaxWidth() {
-	// Pill date: padding 20*2 + ikon 20 + gap 10 = 70px di luar teks; kapasitas musik
-	// lebih kecil karena ada wave icon di kanan (20px + gap 10).
-	// Metrik WAJIB sama dengan MeasureIslandTextWidth (probe DOM) - batas dan teks harus
-	// diukur dengan metrik yang SATU dan sama.
+	// Kapasitas musik lebih kecil karena ada wave icon di kanan (20px + gap 10).
+	// Metrik WAJIB sama dengan MeasureIslandTextWidth (probe DOM), kalau tidak
+	// marquee gagal aktif untuk script non-Latin.
 	const dateTextW = MeasureDomTextWidth(infoPanels[0].text(), islandText);
 	return Math.max(60, dateTextW - 30); // sisakan ruang wave icon
 }
@@ -720,30 +685,26 @@ try {
 	document.documentElement.style.setProperty('--marquee-width', MARQUEE_MAX_WIDTH + 'px');
 } catch (e) { /* fallback tetap 250 */ }
 
-// Ukur lebar piksel teks dengan font #islandText saat ini.
-// [NON-LATIN] WAJIB probe DOM, BUKAN canvas measureText: canvas tidak selalu
-// menjalankan complex-script shaping yang sama (Thai, Devanagari, Arab, Ibrani, CJK
-// kerap terukur lebih sempit) sehingga marquee tak pernah aktif. Probe juga dipakai
-// ComputeMarqueeMaxWidth, jadi batas dan teks diukur dengan metrik yang sama.
+// Ukur lebar teks dengan probe DOM, BUKAN canvas measureText: canvas tidak
+// selalu melakukan complex-script shaping yang sama, jadi teks non-Latin
+// terukur lebih sempit dan marquee tidak pernah aktif.
 function MeasureIslandTextWidth(str) {
 	if (!str) return 0;
 	return MeasureDomTextWidth(str, islandText);
 }
 
-// Satu-satunya fungsi ukur: probe <span> absolut, tersembunyi, nowrap,
-// memakai font elemen acuan (default #islandText).
+// Fungsi ukur: probe <span> absolut tersembunyi, nowrap, font elemen acuan.
 function MeasureDomTextWidth(str, refEl) {
 	if (!str) return 0;
 	const el = refEl || islandText || document.body;
 	let probe = MeasureDomTextWidth._probe;
 	if (!probe) {
 		probe = document.createElement('span');
-		// absolute + visibility:hidden -> tidak memengaruhi layout pill; nowrap -> satu baris.
+		// Posisi absolut + visibility:hidden agar tidak memengaruhi layout pill.
 		probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none;left:-9999px;top:0;';
 		MeasureDomTextWidth._probe = probe;
 	}
-	// Salin properti font yang memengaruhi lebar (shorthand `font` me-reset
-	// weight/style/variant dan bisa menimpa sizing).
+	// Salin properti font satu-satu; shorthand `font` me-reset weight/style/variant.
 	const cs = getComputedStyle(el);
 	probe.style.fontFamily = cs.fontFamily;
 	probe.style.fontSize = cs.fontSize;
@@ -756,20 +717,18 @@ function MeasureDomTextWidth(str, refEl) {
 	// textContent (bukan innerHTML) aman dari markup judul lagu.
 	probe.textContent = str;
 	if (probe.parentNode !== document.body) document.body.appendChild(probe);
-	// Ambil presisi fraksional (offsetWidth dibulatkan) supaya shift marquee tidak meleset.
+	// Ambil presisi fraksional (offsetWidth dibulatkan) agar shift marquee pas.
 	const rect = probe.getBoundingClientRect();
 	const w = (rect && rect.width) ? rect.width : probe.offsetWidth;
 	return w || 0;
 }
 
-// Render teks island: marquee bila teks melebihi kapasitas, shift & durasi dihitung
-// dari overflow nyata (selalu scroll kiri). Return HTML string.
+// Return HTML string; marquee aktif bila teks melebihi kapasitas (selalu scroll kiri).
 function RenderIslandText(nextText, allowMarquee = false) {
 	if (!allowMarquee) return nextText;
 	const textW = MeasureIslandTextWidth(nextText);
-	// Batas TUNGGAL dari CSS (--marquee-width), nilainya berbeda per mode. Karena batas
-	// dan lebar container dibaca dari variabel yang sama, shift selalu pas dan teks
-	// tidak pernah berjalan melewati wave icon.
+	// Batas dari CSS (--marquee-width), berbeda per mode. Karena batas dan
+	// lebar container dibaca dari variabel yang sama, shift selalu pas.
 	const limitW = GetMarqueeWidth();
 	if (textW > limitW) {
 		const shift = limitW - textW; // selalu negatif -> scroll kiri
@@ -780,9 +739,7 @@ function RenderIslandText(nextText, allowMarquee = false) {
 	return nextText;
 }
 
-// Baca batas marquee yang SEDANG BERLAKU dari CSS. Sumber kebenaran tunggal =
-// --marquee-width, di-override per mode (lihat style.css), sehingga JS tidak perlu
-// tahu mode apa yang sedang aktif.
+// Batas marquee dari --marquee-width, di-override per mode di style.css.
 function GetMarqueeWidth() {
 	try {
 		const el = dynamicIsland || document.documentElement;
@@ -824,16 +781,6 @@ function StartScrubberAnimation() {
 	const elTot = document.getElementById('scrubberTotal');
 	const elFill = document.querySelector('.scrub-fill');
 	const elThumb = document.querySelector('.scrub-thumb');
-
-	// [PERF] Throttle scrubber: posisi hanya berubah per detik, jadi 250ms (4 fps) cukup.
-	// Di Electron/TTLS yang berbagi GPU dengan encoding, menulis DOM 60x/detik bikin
-	// marquee & wave icon tersendat.
-	const SCRUBBER_INTERVAL_MS = 250;
-	let lastPaintAt = 0;
-	// [PERF] Simpan nilai terakhir: penulisan identik tetap memicu repaint.
-	let lastCurr = null;
-	let lastTot = null;
-	let lastVisualPct = null;
 	
 	function loop() {
 		// Stop animating if alert is no longer showing music big style
@@ -843,7 +790,7 @@ function StartScrubberAnimation() {
 		
 		if (nowPlayingData.timeline) {
 			const tp = nowPlayingData.timeline;
-			// Pakai timestamp asli dari Windows SMTC Bridge agar posisi tersinkron (mengatasi stutter).
+			// Gunakan timestamp asli dari Windows SMTC Bridge agar posisi tersinkron sempurna (mengatasi stutter/patah-patah)
 			let lastUpdateAnchor = Date.now();
 			if (tp.LastUpdatedTime) {
 				const parsed = Date.parse(tp.LastUpdatedTime.replace(' ', 'T'));
@@ -851,10 +798,10 @@ function StartScrubberAnimation() {
 			}
 			const driftMs = Date.now() - lastUpdateAnchor;
 			
-			// Bridge bisa mengirim Ticks (100ns); deteksi dari besaran angkanya.
+			// Deteksi format Ticks (100ns) dari besaran angkanya.
 			let pos = Number(tp.Position) || 0;
 			let end = Number(tp.EndTime) || 0;
-			// Konversi Tick -> ms bila endTime > 1 juta ms padahal ini lagu biasa.
+			// Tick to Ms conversion (jika end time > 1 juta milidetik padahal ini lagu biasa)
 			if (end > 864000000) { 
 				pos = Math.floor(pos / 10000);
 				end = Math.floor(end / 10000);
@@ -864,39 +811,16 @@ function StartScrubberAnimation() {
 			const posMs = Math.max(0, Math.min(currentPositionMs, end));
 			const totalMs = end;
 			
-			// [PERF] Throttle: hanya tulis DOM bila sudah lewat interval.
-			const now = Date.now();
-			if (now - lastPaintAt < SCRUBBER_INTERVAL_MS) {
-				scrubberAnimFrame = requestAnimationFrame(loop);
-				return;
-			}
-			lastPaintAt = now;
-
-			const currStr = formatTimeMs(posMs);
-			const totStr = formatTimeMs(totalMs);
-			if (elCurr && currStr !== lastCurr) {
-				elCurr.textContent = currStr;
-				lastCurr = currStr;
-			}
-			if (elTot && totStr !== lastTot) {
-				elTot.textContent = totStr;
-				lastTot = totStr;
-			}
+			if (elCurr) elCurr.textContent = formatTimeMs(posMs);
+			if (elTot) elTot.textContent = formatTimeMs(totalMs);
 			
 			if (elFill && totalMs > 0) {
 				const pct = (posMs / totalMs) * 100;
-				// Posisikan matematis: visual mulai minimal dari 25% lebarnya, lalu bergerak ke 100%
-				// saat lagu mendekati akhir.
+				// Visual mulai dari 25% lebar, naik ke 100% saat lagu mendekati akhir.
 				const visualPct = 25 + (pct * 0.75);
-				// [PERF] Bulatkan ke 2 desimal: perubahan di bawah itu tak terlihat tapi tetap
-				// memicu repaint.
-				const roundedPct = Math.round(visualPct * 100) / 100;
-				if (roundedPct !== lastVisualPct) {
-					elFill.style.width = `${roundedPct}%`;
-					if (elThumb) elThumb.style.left = `${roundedPct}%`;
-					lastVisualPct = roundedPct;
-				}
-				// Progress bar polos: tidak ada pergantian blob wave.
+				elFill.style.width = `${visualPct}%`;
+				if (elThumb) elThumb.style.left = `${visualPct}%`;
+				// Progress bar polos: tidak ada animasi squiggly wave.
 			}
 		}
 		
@@ -906,13 +830,7 @@ function StartScrubberAnimation() {
 	loop();
 }
 
-// Durasi animasi .ambient-bounce di style.css (0.3s). Dipakai mencegah bounce
-// di-restart oleh dua panggilan UpdateInfoText berurutan.
-const AMBIENT_BOUNCE_MS = 300;
-let lastAmbientBounceAt = 0;
-
-// Tidak ada panel yang bisa tayang? Sembunyikan pill - lebih baik hilang daripada
-// menampilkan teks fallback.
+// Sembunyikan pill bila tidak ada panel yang bisa tayang.
 function SyncIslandVisibility() {
 	if (!dynamicIsland) return;
 	const anyVisible = infoPanels.some(p => !(p.skip && p.skip()));
@@ -926,7 +844,7 @@ function CycleInfo() {
 		currentPanelIndex = (currentPanelIndex + 1) % infoPanels.length;
 		attempts++;
 	} while (infoPanels[currentPanelIndex].skip && infoPanels[currentPanelIndex].skip() && attempts < infoPanels.length);
-	// Guard: bila SEMUA panel ter-skip, jangan biarkan pill menampilkan panel yang di-skip.
+	// Guard: jangan tampilkan panel yang ter-skip.
 	if (infoPanels[currentPanelIndex].skip && infoPanels[currentPanelIndex].skip()) return;
 
 	SyncIslandVisibility();
@@ -938,15 +856,13 @@ function UpdateInfoText(animate = true, allowBounce = true) {
 	ApplyInfoPanel(animate, allowBounce);
 }
 
-// Segarkan ikon audio wave (warna lightVibrant) secara diam-diam. Dipakai di semua
-// mode: ambient, senyap, dan pasca-alert.
+// Segarkan ikon wave (warna lightVibrant) tanpa animasi, di semua mode.
 function RefreshMusicWaveIcon(force = false) {
 	if (isAlertActive && !force) return;
 	const panel = infoPanels[currentPanelIndex];
 	if (!panel || panel.id !== 'music' || !panel.rightIcon) return;
 	if (islandEventIcon) {
-		// Jangan set ulang src kalau warna belum berubah: set ulang me-restart animasi
-		// <animate> di dalam SVG (wave jadi patah-patah).
+		// Set ulang src me-restart animasi <animate> di SVG (wave jadi kedut).
 		const nextSrc = typeof panel.rightIcon === 'function' ? panel.rightIcon() : panel.rightIcon;
 		if (force || islandEventIcon.src !== nextSrc) {
 			islandEventIcon.src = nextSrc;
@@ -955,16 +871,13 @@ function RefreshMusicWaveIcon(force = false) {
 	}
 }
 
-// Perbarui panel penonton TANPA animasi bounce.
-// Dipakai oleh poll deteksi live, tick per detik, dan pembaruan viewer count
-// supaya tampilan tidak berkedut terus-menerus.
+// Perbarui teks panel tanpa animasi (dipakai poll & tick per detik).
 function RefreshInfoText() {
 	if (isAlertActive) return;
 	ApplyInfoPanel(false);
 }
 
-// Terapkan perubahan jumlah penonton: HANYA bila panel penonton sedang tampil
-// (index 4), dan tanpa bounce supaya animasi masuk tidak dipicu ulang.
+// Perbarui jumlah penonton tanpa bounce, hanya bila panel penonton tampil.
 function UpdateViewerCount() {
 	if (isAlertActive) return;
 
@@ -988,25 +901,21 @@ function ApplyInfoPanel(animate, allowBounce = true) {
 
 	const nextText = panel.text();
 
-	// -- SATU-SATUNYA penanda pause --
-	// Panel ambient musik = SATU panel. Pause HANYA mengubah: 1) class pill
-	// `music-paused` -> overlay pause (CSS), 2) teks -> "Paused • m:ss". Wave icon,
-	// marquee, ikon, dan jalur render SAMA PERSIS seperti saat play.
+	// Pause HANYA mengubah dua hal: class `music-paused` (overlay CSS) dan
+	// teks "Paused • m:ss". Jalur render lain sama persis seperti saat play.
 	if (dynamicIsland) {
 		dynamicIsland.classList.toggle('music-paused',
 			panel.id === 'music' && nowPlayingData.pausedAtMs !== null);
-		// Warna aksen untuk icon pause. Hanya panel ambient - dynamic big tidak disentuh.
+		// Aksen untuk ikon pause; hanya panel ambient, music big tidak disentuh.
 		if (panel.id === 'music' && !dynamicIsland.classList.contains('alert-music-big')) {
 			dynamicIsland.style.setProperty('--accent-color',
 				nowPlayingData.lightVibrant || '#8A2BE2');
 		}
 	}
 
-	// Mode senyap: tulis ulang teks bila benar-benar berubah. Tidak menyentuh elemen
-	// lain dan tidak memicu animasi.
+	// Mode senyap: tulis ulang teks bila berubah, tanpa animasi.
 	if (!animate) {
-		// Panel musik butuh RenderIslandText: marquee hidup dari innerHTML terstruktur.
-		// Menulis textContent saja membuat marquee tak aktif saat panel digambar ulang.
+		// Panel musik butuh RenderIslandText: textContent saja mematikan marquee.
 		if (panel.id === 'music') {
 			const nextHtml = RenderIslandText(nextText, true);
 			if (islandText.innerHTML !== nextHtml) {
@@ -1022,24 +931,15 @@ function ApplyInfoPanel(animate, allowBounce = true) {
 	// Mode rotasi / render awal: isi ulang panel + animasi fade/bounce pada teks.
 	islandText.innerHTML = RenderIslandText(nextText, panel.id === 'music');
 
-	// Fade/bounce-in halus pada teks saat panel berganti + bounce pill yang sangat tipis
-	// (ambient-bounce), jika diizinkan.
+	// Fade/bounce-in halus pada teks + bounce pill tipis (ambient-bounce).
 	islandText.classList.remove('bounce-in');
 	void islandText.offsetWidth; // restart animasi
 	islandText.classList.add('bounce-in');
 	
-	// Bounce pill TIPIS saat panel berganti. [OBS] JANGAN restart kalau bounce masih
-	// berjalan: saat keluar music big, UpdateInfoText dipanggil dua kali - di Chrome
-	// jatuh di frame sama (satu animasi), di OBS jatuh di frame berbeda (bounce ganda).
-	if (allowBounce && (Date.now() - (lastAmbientBounceAt || 0)) < AMBIENT_BOUNCE_MS) {
-		// bounce sebelumnya masih berjalan: biarkan, jangan di-restart
-	} else {
-		dynamicIsland.classList.remove('ambient-bounce');
-		void dynamicIsland.offsetWidth;
-		if (allowBounce) {
-			lastAmbientBounceAt = Date.now();
-			dynamicIsland.classList.add('ambient-bounce');
-		}
+	dynamicIsland.classList.remove('ambient-bounce');
+	void dynamicIsland.offsetWidth;
+	if (allowBounce) {
+		dynamicIsland.classList.add('ambient-bounce');
 	}
 
 	islandIcon.src = typeof panel.icon === 'function' ? panel.icon() : panel.icon;
@@ -1049,15 +949,13 @@ function ApplyInfoPanel(animate, allowBounce = true) {
 		islandIcon.classList.remove('rounded-icon');
 	}
 	
-	// [NO FALLBACK] Tidak ada ikon pengganti untuk artwork: panel musik
-	// hanya dirender bila artwork benar-benar ada (lihat skip di atas).
-	// onerror di-null-kan supaya handler panel SEBELUMNYA tidak menempel.
+	// [NO FALLBACK] Tidak ada ikon pengganti artwork. onerror di-null-kan
+	// agar handler panel sebelumnya tidak menempel.
 	islandIcon.onerror = null;
 	islandIcon.classList.remove('hidden');
 	SyncIconWrapHidden();
 
-	// Simpan nilai mentah di span.dataset.viewers untuk inspeksi/debug (dan siap bila
-	// nanti perlu menjumlahkan penonton lintas platform).
+	// Simpan nilai mentah di dataset.viewers untuk inspeksi/debug.
 	if (typeof panel.rawViewers === 'function') {
 		islandText.dataset.viewers = String(panel.rawViewers());
 	} else if (islandText.dataset.viewers) {
@@ -1073,8 +971,7 @@ function ApplyInfoPanel(animate, allowBounce = true) {
 		islandSubtext.textContent = '';
 	}
 	
-	// Mode pause panel musik: overlay pause menutupi album art, wave icon disembunyikan.
-	// Diterapkan di atas blok mode senyap supaya berlaku di SEMUA mode render.
+	// Saat pause: overlay menutupi album art, wave icon disembunyikan.
 	if (islandEventIcon && panel.rightIcon) {
 		const nextRight = typeof panel.rightIcon === 'function' ? panel.rightIcon() : panel.rightIcon;
 		if (islandEventIcon.__gesekiRightSrc !== nextRight) {
@@ -1103,35 +1000,6 @@ async function FetchNowPlaying() {
 
 		const data = await response.json();
 
-		ApplyNowPlayingData(data);
-	} catch (error) {
-		nowPlayingData.isPlaying = false;
-		// Bridge putus -> koneksi berikutnya dianggap sesi baru (lagu pertama tidak lagi
-		// dianggap "ganti lagu").
-		nowPlayingData._seeded = false;
-	}
-}
-
-// Dekode artwork di luar DOM untuk memastikan gambar valid & bisa digambar.
-// Dipakai penundaan alert song change: alert tidak tayang sebelum artwork siap.
-function DecodeArtwork(src) {
-	return new Promise((resolve) => {
-		const img = new Image();
-		let done = false;
-		const finish = (ok) => { if (!done) { done = true; resolve(ok); } };
-		// Timeout: jangan biarkan decode menggantung (fetch jalan tiap 1 detik, tick
-		// berikutnya mencoba lagi).
-		const timer = setTimeout(() => finish(false), 3000);
-		img.onload = () => { clearTimeout(timer); finish(img.naturalWidth > 0 && img.naturalHeight > 0); };
-		img.onerror = () => { clearTimeout(timer); finish(false); };
-		img.src = src;
-	});
-}
-
-// Inti pemrosesan now playing. Dipanggil dari fetch lokal.
-async function ApplyNowPlayingData(data) {
-
-	{
 		// Parse and clean settings arrays
 		const includedList = includedApplications
 			? includedApplications.split(',').map(app => app.trim().toLowerCase()).filter(Boolean)
@@ -1158,7 +1026,7 @@ async function ApplyNowPlayingData(data) {
 				});
 				if (targetSession) break;
 			}
-			// Jatuh kembali (fallback) walau sedang pause (opsional).
+			// Fallback: tetap dipakai walau sedang pause.
 			if (!targetSession) {
 				for (const targetApp of includedList) {
 					targetSession = validSessions.find(s => (s.source_app_id || "").toLowerCase().includes(targetApp));
@@ -1167,7 +1035,7 @@ async function ApplyNowPlayingData(data) {
 			}
 		} else {
 			// Fallback tanpa included list:
-			// Priority 1: pakai current_session_id dari bridge (Windows focused session)
+			// Priority 1: current_session_id dari bridge (Windows focused session)
 			if (data.current_session_id) {
 				targetSession = validSessions.find(s => s.source_app_id === data.current_session_id);
 			}
@@ -1178,15 +1046,14 @@ async function ApplyNowPlayingData(data) {
 				if (playingSession) targetSession = playingSession;
 			}
 
-			// Priority 3: fallback terakhir ke session valid pertama.
+			// Priority 3: session valid pertama.
 			if (!targetSession && validSessions.length > 0) {
 				targetSession = validSessions[0];
 			}
 		}
 
-		// [PENTING] Timeline & metadata diisi untuk SEMUA status (play/pause). Dulu hanya
-		// saat PLAYING, jadi saat pause `timeline` masih milik lagu terakhir -> posisi
-		// pause selalu salah.
+		// [PENTING] Timeline & metadata harus diisi di semua status (play/pause),
+		// kalau tidak posisi pause memakai timeline lagu terakhir.
 		if (targetSession) {
 			nowPlayingData.timeline = targetSession.timeline_properties;
 		}
@@ -1199,9 +1066,9 @@ async function ApplyNowPlayingData(data) {
 			const nextTitle = targetSession.media_properties?.Title || "Unknown";
 			const nextArtist = targetSession.media_properties?.Artist || "Unknown";
 
-			// Masalah #1: jangan tampilkan alert song-change untuk metadata kosong. PENTING:
-			// jangan reset _lastSongId di sini - SMTC sering melapor "Unknown" 1-2 detik
-			// sebelum metadata asli tiba; kalau di-reset, alert HILANG saat metadata lengkap.
+			// Jangan alert untuk metadata kosong ("Unknown"). PENTING: jangan reset
+			// _lastSongKey — metadata asli datang 1-2 detik kemudian dan kalau key
+			// jadi "" alert tidak pernah muncul.
 			const isUnknownMeta = (nextTitle === "Unknown" || nextArtist === "Unknown");
 			if (isUnknownMeta) {
 				return;
@@ -1209,71 +1076,54 @@ async function ApplyNowPlayingData(data) {
 
 			const newArt = targetSession.media_properties?.Thumbnail || targetSession.media_properties?.ThumbnailBase64 || "";
 
-			// [WAIT ARTWORK] Artwork harus benar-benar BISA DIGAMBAR sebelum commit: base64
-			// potongan / data URL invalid bikin palet jatuh ke fallback. Karena itu artwork
-			// di-DECODE DULU; gagal -> simpan keinginan alert, data lama utuh, coba lagi.
+			// [DO NOTHING] Menunggu artwork: jangan commit metadata apa pun,
+			// tampilan ambient tidak boleh berubah. Tandai alert; tick berikutnya
+			// menembaknya saat art tiba.
 			if (!newArt || newArt === "") {
-				nowPlayingData._pendingSongAlert = nextTitle + "-" + nextArtist;
-				return;
-			}
-
-			const artReady = await DecodeArtwork(newArt);
-			if (!artReady) {
 				nowPlayingData._pendingSongAlert = nextTitle + "-" + nextArtist;
 				return;
 			}
 
 			nowPlayingData.title = nextTitle;
 			nowPlayingData.artist = nextArtist;
-			// Simpan metadata valid untuk dipulihkan setelah reload.
-			SaveTrackMeta();
 
-			// DUA key, dua keperluan:
-			// 1) songIdKey = Title-Artist -> penentu ganti lagu, kebal terhadap artwork yang
-			//                datang terlambat.
+			// Key menyertakan thumbnail agar kualitas gambar yang berubah terdeteksi.
+			const currentSongKey = nowPlayingData.title + "-" + nowPlayingData.artist + "-" + newArt;
+			// Identitas lagu TANPA thumbnail: kebal terhadap artwork yang datang
+			// terlambat, dipakai _pendingSongAlert agar satu lagu = satu alert.
 			const songIdKey = nowPlayingData.title + "-" + nowPlayingData.artist;
-			// 2) currentSongKey = Title-Artist-Thumbnail -> khusus guard race palet.
-			const currentSongKey = songIdKey + "-" + newArt;
 			const expectedKeyOnFinish = currentSongKey;
-
-			// songChanged murni dari identitas lagu, bukan thumbnail. [Seed] Bacaan AKTIF
-			// pertama hanya MENANAM key - tanpa ini, lagu yang sedang berjalan langsung
-			// dianggap "ganti lagu" begitu bridge connect.
+			// [Seed] Bacaan pertama hanya menanam key tanpa alert, kalau tidak
+			// lagu yang sedang jalan langsung dianggap ganti lagu.
 			if (!nowPlayingData._seeded) {
 				nowPlayingData._seeded = true;
-				nowPlayingData._lastSongId = songIdKey;
 				nowPlayingData._lastSongKey = currentSongKey;
 				return;
 			}
-			// PENEMBAK ULANG alert yang ditunda: artwork sudah ada -> paksa songChanged agar
-			// alert tayang SEKALI.
+			// Alert yang ditunda: artwork sudah ada -> paksa songChanged, tayang SEKALI.
 			const pendingSongAlert = nowPlayingData._pendingSongAlert || null;
 			if (pendingSongAlert && pendingSongAlert === songIdKey) {
 				nowPlayingData._pendingSongAlert = null;
 			}
-			// [ANTI DOBEL] Penjaga absolut: lagu ini sudah pernah ditembak -> JANGAN tembak
-			// lagi, apa pun alasannya. _pendingSongAlert dibersihkan dulu supaya tidak
-			// menggantung dan menembak ulang di tick berikutnya.
+			// [ANTI DOBEL] Lagu ini sudah pernah ditembak -> jangan tembak lagi.
+			// Bersihkan _pendingSongAlert lebih dulu agar tidak menggantung.
 			const alreadyAlerted = (songIdKey === nowPlayingData._lastAlertedSongId);
 			if (alreadyAlerted) {
 				nowPlayingData._pendingSongAlert = null;
 			}
 			const songChanged = !alreadyAlerted
-				&& ((!!nowPlayingData._lastSongId && songIdKey !== nowPlayingData._lastSongId)
+				&& ((nowPlayingData._lastSongKey && currentSongKey !== nowPlayingData._lastSongKey)
 					|| pendingSongAlert === songIdKey);
-			nowPlayingData._lastSongId = songIdKey;
 			nowPlayingData._lastSongKey = currentSongKey;
 
-			// TUNGGU palet selesai DULU, tanpa syarat, sebelum menilai status playback maupun
-			// ganti lagu. `await` ini sekaligus menjadi mekanisme "tunggu album art benar-benar
-			// ada". Normalisasi base64 SMTC -> data URL; tanpa artwork artUrl tetap ''.
+			// TUNGGU palet selesai sebelum menilai status playback / ganti lagu.
+			// GetAccentPalette resolve setelah gambar ter-load & ter-decode, jadi
+			// ini sekaligus memastikan album art benar-benar ada.
 			let artUrl = newArt;
 			if (newArt && newArt.length > 100 && !newArt.startsWith("http") && !newArt.startsWith("data:")) {
 				artUrl = "data:image/jpeg;base64," + newArt;
 			}
-			// Palet diekstrak dari artwork nyata. Bila tidak ada artwork, palet dikosongkan -
-			// dipulihkan dari catch di bawah.
-			const paletteSource = artUrl;
+			const paletteSource = artUrl || undefined;
 			nowPlayingData.albumArt = artUrl;
 
 			const prevLightVibrant = nowPlayingData.lightVibrant;
@@ -1281,8 +1131,8 @@ async function ApplyNowPlayingData(data) {
 			try {
 				const hexPalette = await GetAccentPaletteCached(paletteSource);
 
-				// [Race Condition Fix] Spam 'Next' cepat: lagu bisa terganti LAGI saat ekstraksi
-				// palet berjalan. Bila key lagu sudah usang, batalkan perwujudan warna & alert ini.
+				// [Race] Spam 'Next': lagu bisa terganti lagi saat palet diekstrak.
+				// Key sudah usang -> batalkan.
 				if (nowPlayingData._lastSongKey !== expectedKeyOnFinish) return;
 
 				nowPlayingData.palette = hexPalette;
@@ -1298,48 +1148,40 @@ async function ApplyNowPlayingData(data) {
 				nowPlayingData.lightVibrant = nowPlayingData.lightVibrant || "#8A2BE2";
 			}
 
-			// Segarkan wave icon HANYA bila warna benar-benar berubah: force=true me-restart
-			// animasi SMIL <animate>, sehingga memanggilnya tiap tick bikin wave berkedut.
+			// Segarkan wave icon HANYA bila warna berubah: force=true me-restart
+			// animasi SMIL, dipanggil tiap tick bikin wave berkedut.
 			if (nowPlayingData.lightVibrant !== prevLightVibrant) {
 				RefreshMusicWaveIcon(true);
 			}
 
 			SyncIslandVisibility();
 
-			// Data sudah benar-benar siap (metadata + palet): langsung ChangeTrack tanpa
-			// setTimeout debounce.
+			// Metadata + palet sudah siap: langsung ganti lagu, tanpa debounce.
 			if (songChanged) {
 				nowPlayingData._pendingSongAlert = null;
 				// Tandai SEBELUM TriggerAlert: satu songId = satu alert.
 				nowPlayingData._lastAlertedSongId = songIdKey;
 				const musicPanel = infoPanels.find(p => p.id === 'music');
-				// Dua mode judul (bergantung enableDynamicStyleBig):
-				// - Big ON : judul SAJA - artist sudah tampil di baris #islandSubtext.
-				// - Big OFF: "judul • artis" - tidak ada subtext, artis wajib inline atau hilang.
-				const alertText = enableDynamicStyleBig ? nowPlayingData.title : musicText();
+				// Music Big: judul TANPA "• artist" (artist sudah ada di subtext).
 				TriggerAlert({
 					type: 'music',
-					// Artwork sudah pasti ada: alert song change ditunda sampai thumbnail tiba.
+					// Artwork pasti ada: alert song change ditunda sampai thumbnail tiba.
 					icon: nowPlayingData.albumArt,
 					rightIcon: musicPanel.rightIcon,
-					text: alertText,
-					// WAJIB sertakan artis: update in-place menulis `alertData.subtext || ''`, kalau
-					// tidak dikirim nama artis hilang saat lagu ganti di tengah antrean.
-					subtext: enableDynamicStyleBig ? (nowPlayingData.artist || '') : ''
+					text: nowPlayingData.title,
+					subtext: nowPlayingData.artist || ''
 				});
-				// JANGAN panggil ForceMusicPanelActive(): itu memaksa panel musik aktif dan
-				// melompati antrean. Biarkan TriggerAlert mengantre.
+				// JANGAN panggil ForceMusicPanelActive(): itu melompati antrean.
+				// Biarkan TriggerAlert mengantre.
 			} else if (infoPanels[currentPanelIndex].id === 'music') {
-				// [PERF] Jangan render ulang tiap tick (fetch jalan tiap 1 detik): menggambar ulang
-				// panel aktif tiap kali membuat overlay pause & teks berkedip. Bandingkan dulu.
-				// JANGAN gambar ulang saat song change sedang tayang (music big): menimpa judul,
-				// artwork, dan palet kartu besar -> tampilan berkedip.
-				// Biarkan antrean alert yang mengatur tampilan itu.
+				// [PERF] Gambar ulang HANYA bila ada perubahan: FetchNowPlaying
+				// jalan tiap 1 detik dan render ulang bikin teks berkedip.
+				// Saat music big tayang, UpdateInfoText(false) menimpa judul, artwork,
+				// dan palet -> biarkan antrean yang mengatur.
 				const bigBusy = isAlertActive ||
 					(dynamicIsland && dynamicIsland.classList.contains('alert-music-big'));
 				if (bigBusy) {
-					// Tetap simpan kunci render supaya setelah kartu besar selesai, panel ambient
-					// langsung sinkron.
+					// Simpan kunci render agar panel ambient sinkron setelah kartu besar.
 					nowPlayingData._lastRenderKey = [
 						nowPlayingData.albumArt || '',
 						nowPlayingData.title || '',
@@ -1364,7 +1206,7 @@ async function ApplyNowPlayingData(data) {
 		} else {
 			const wasPlaying = nowPlayingData.isPlaying;
 			nowPlayingData.isPlaying = false;
-			// [JANGAN hapus albumArt] Panel musik versi pause butuh artwork + overlay pause.
+			// [JANGAN hapus albumArt] Panel pause butuh artwork + overlay.
 			// Simpan posisi pause untuk label "Paused • m:ss".
 			if (targetSession && nowPlayingData.timeline) {
 				const tp = nowPlayingData.timeline;
@@ -1379,11 +1221,9 @@ async function ApplyNowPlayingData(data) {
 				nowPlayingData.pausedAtMs = null;
 			}
 
-			// Lagu dimatikan SAAT panel musik tayang -> sela putarannya (skip) agar teks
-			// 'Tidak ada lagu' tidak pernah muncul.
-			// Panel musik yang sedang tayang HARUS digambar ulang saat status berubah: pause ->
-			// overlay + "Paused • m:ss", play -> judul/artis + wave icon. Tanpa ini pill membeku
-			// di tampilan terakhir sampai rotasi berganti panel.
+			// Panel musik yang sedang tayang HARUS digambar ulang saat status berubah
+			// (pause -> overlay + "Paused • m:ss", play -> judul/artis + wave icon),
+			// kalau tidak pill membeku di tampilan terakhir.
 			if (infoPanels[currentPanelIndex] && infoPanels[currentPanelIndex].id === 'music') {
 				UpdateInfoText(false);
 			} else if (wasPlaying) {
@@ -1391,6 +1231,10 @@ async function ApplyNowPlayingData(data) {
 			}
 			SyncIslandVisibility();
 		}
+	} catch (error) {
+		nowPlayingData.isPlaying = false;
+		// Bridge putus -> koneksi berikutnya = sesi baru (lagu pertama bukan ganti lagu).
+		nowPlayingData._seeded = false;
 	}
 }
 
@@ -1435,8 +1279,7 @@ function StopSecondTicker() {
 // TIKTOK LIVE STUDIO - DETEKSI STATUS LIVE //
 /////////////////////////////////////////////
 
-// Protokol Stream Deck LIVE Studio (terverifikasi di 1.35.2).
-// Port tidak tetap; LIVE Studio memilih salah satu dari daftar ini.
+// Port Stream Deck LIVE Studio tidak tetap (terverifikasi di 1.35.2).
 const LIVE_STUDIO_PORTS = [28189, 39728, 34246, 42205, 38534, 40825, 40622];
 const LS_SOCKET_PATH = '/socket.io/';
 const LS_SOCKET_PROTOCOL = 'streamdeck_ttls_v1';
@@ -1485,7 +1328,7 @@ function ClearStoredStartMs() {
 	} catch (e) { /* abaikan */ }
 }
 
-// Terapkan perubahan status. startOverrideMs: waktu mulai eksplisit (uji coba).
+// startOverrideMs = waktu mulai eksplisit (untuk simulasi/uji coba).
 function ApplyLiveStatus(nextStatus, startOverrideMs) {
 	const prev = liveStatus;
 	const changed = prev !== nextStatus;
@@ -1498,25 +1341,20 @@ function ApplyLiveStatus(nextStatus, startOverrideMs) {
 			liveStartFromStorage = false;
 			SaveStartMs(liveStartedAtMs);
 		} else if (liveStartedAtMs === null) {
-			// Belum punya waktu mulai -> sesi live baru (atau widget baru load), pakai waktu
-			// sekarang. Cukup cek `liveStartedAtMs === null`; JANGAN pakai penanda
-			// liveStartFromStorage di kondisi ini - penanda itu khusus startup, dan
-			// menggunakannya membuat poll berikutnya (tiap 2.5 detik) terus menghitung ulang
-			// waktu mulai.
+			// Belum punya waktu mulai -> sesi live baru.
+			// PENTING: cukup cek `liveStartedAtMs === null`. Memakai liveStartFromStorage
+			// di sini membuat poll (2.5s) menghitung ulang waktu mulai terus-menerus.
 			liveStartedAtMs = Date.now();
 			liveStartFromStorage = false;
 			SaveStartMs(liveStartedAtMs);
 		}
-		// else: liveStartedAtMs sudah ada -> pertahankan, jangan pernah diubah oleh polling.
-		//        Inilah yang membuat durasi terus bertambah.
+		// liveStartedAtMs sudah ada -> pertahankan, jangan diubah polling.
 		if (prev !== LS_STATUS.live) {
 			console.debug('[Geseki][LiveDetect] LIVE, start =', new Date(liveStartedAtMs).toLocaleString('id-ID'));
-			// Live BARU dimulai dari aplikasi (bukan reload): bersihkan riwayat first chatter.
 			if (typeof ResetFirstChatter === 'function') ResetFirstChatter();
 		}
 	} else if (prev === LS_STATUS.live || liveStartFromStorage) {
-		// Live berakhir, ATAU terbukti bukan reload (status pertama = offline). Reset supaya
-		// sesi berikutnya menghitung dari nol.
+		// Live berakhir / bukan reload -> reset agar sesi berikutnya hitung dari nol.
 		liveStartedAtMs = null;
 		liveStartFromStorage = false;
 		ClearStoredStartMs();
@@ -1524,14 +1362,12 @@ function ApplyLiveStatus(nextStatus, startOverrideMs) {
 		console.debug('[Geseki][LiveDetect] Tidak live, status =', nextStatus);
 	}
 
-	// Segarkan tampilan HANYA bila status benar-benar berubah: poll tiap 2.5 detik,
-	// tanpa penjaga ini widget akan bounce terus walau statusnya sama.
+	// Segarkan HANYA bila status berubah — poll jalan tiap 2.5 detik.
 	if (!changed || isAlertActive) return;
 
 	const panel = infoPanels[currentPanelIndex];
 	if (panel && (panel.id === 'duration' || panel.id === 'viewers')) {
-		// Transisi live <-> offline memang layak dapat animasi, karena panel berpindah antara
-		// "Stream Offline" dan "Live - ...".
+		// Transisi live <-> offline memang layak dianimasikan.
 		UpdateInfoText();
 	}
 }
@@ -1667,8 +1503,8 @@ function ScheduleLiveRetry(portIndex) {
 
 function InitLiveDetection() {
 	if (!enableLiveDetect) {
-		// Deteksi mati: tidak ada sumber waktu mulai lain, jadi selalu anggap live dan hitung
-		// dari widgetStartTime - durasi akan nol tiap kali OBS me-reload source.
+		// Deteksi mati: tidak ada sumber waktu mulai lain, jadi anggap live
+		// dari widgetStartTime — durasi nol tiap kali OBS reload source.
 		console.debug('[Geseki][LiveDetect] Dinonaktifkan lewat pengaturan.');
 		liveStatus = LS_STATUS.live;
 		liveStartedAtMs = widgetStartTime;
@@ -1676,12 +1512,11 @@ function InitLiveDetection() {
 		return;
 	}
 
-	// Default "belum diketahui" (null), BUKAN offline. Kalau status pertama terbaca live,
-	// kita tidak tahu itu reload di tengah sesi atau sesi baru.
+	// Default null (belum diketahui), BUKAN offline: kalau status pertama live,
+	// penanda ini membedakan reload di tengah sesi dari sesi baru.
 	liveStatus = null;
 
-	// Pulihkan waktu mulai dari localStorage: khusus widget di-reload di tengah sesi live
-	// yang sama (OBS suka me-reload browser source). Dibuang bila ternyata sesi baru.
+	// Pulihkan waktu mulai dari localStorage (OBS suka me-reload browser source).
 	if (liveStartedAtMs === null) {
 		const stored = LoadStoredStartMs();
 		if (stored !== null) {
@@ -1759,8 +1594,7 @@ async function FetchWeather() {
 	}
 }
 
-// Tunggu paling lama `ms`, lalu lanjut apa pun hasilnya: kalau jaringan mati, widget
-// tetap tayang (teks fallback) daripada tidak pernah menggambar apa pun.
+// Tunggu paling lama `ms`, lalu lanjut apa pun hasilnya.
 function WithTimeout(promise, ms) {
 	return Promise.race([
 		Promise.resolve(promise),
@@ -1768,31 +1602,23 @@ function WithTimeout(promise, ms) {
 	]);
 }
 
-// Ambil SEMUA data panel dulu, baru gambar pill pertama.
-// RIWAYAT (jangan diulang): dulu fetch dipanggil lalu langsung UpdateInfoText()
-// tanpa await, jadi panel pertama selalu digambar SEBELUM data balik -> teks fallback
-// yang tampil. Menambah `skip` per panel BUKAN solusi: itu menyembunyikan panel,
-// bukan mengisi datanya tepat waktu.
 async function InitInfoLoop() {
-	// Isi dulu, tanpa menggambar apa pun.
+	// Isi semua data panel dulu agar panel pertama tidak tampil teks fallback.
 	await WithTimeout(Promise.all([FetchWeather(), FetchNowPlaying()]), 2500);
 
 	setInterval(FetchWeather, WEATHER_REFRESH_INTERVAL);
-	setInterval(FetchNowPlaying, 1000); // FetchNowPlaying = 1000ms
+	setInterval(FetchNowPlaying, 2000); // Check media every 2 seconds
 
-	// Baru gambar: data sudah tersedia untuk semua panel.
 	UpdateInfoText();
 	StartCycleTimer();
-	// Pill disembunyikan sejak frame pertama (class island-no-panel) supaya teks
-	// "Loading..." tanpa icon tidak pernah terlihat. Sekarang data siap -> tampilkan
-	// (atau biarkan tersembunyi bila tidak ada panel yang bisa tayang).
+	// Pill disembunyikan sejak frame pertama agar "Loading..." tidak terlihat.
+	// Data siap -> tampilkan (atau biarkan tersembunyi bila tidak ada panel).
 	SyncIslandVisibility();
 	// Deteksi status LIVE Studio (mengisi liveStatus + liveStartedAtMs)
 	LoadSocketIoAndDetect();
 }
 
-// Pulihkan state pause SEBELUM fetch pertama supaya panel musik langsung benar
-// setelah reload.
+// Pulihkan state pause SEBELUM fetch pertama; fetch menimpanya bila berubah.
 LoadPauseState();
 InitInfoLoop();
 
@@ -1804,8 +1630,7 @@ const alertQueue = [];
 let alertLocked = false;
 const recentAlerts = new Map();
 
-// Durasi alert saat ini, dihitung ulang tiap kali alert mulai tayang: antrean padat ->
-// lebih cepat; antrean surut -> kembali ke alertDisplayDuration.
+// Durasi alert: antrean padat -> lebih cepat; surut -> alertDisplayDuration.
 function ComputeAlertDuration() {
 	// Hanya event yang MASIH MENUNGGU. Alert yang sedang tayang tidak dihitung.
 	const backlog = alertQueue.length;
@@ -1835,8 +1660,6 @@ function TriggerAlert(iconOrOptions, textArg, avatarArg, titleArg, subtextArg) {
 		};
 	}
 
-	// Song change SELALU masuk antrean (tidak ada update in-place). Buang alert musik
-	// usang yang masih mengantre agar hanya 1 lagu terbaru yang menunggu.
 	if (alertData.type === 'music') {
 		for (let i = alertQueue.length - 1; i >= 0; i--) {
 			if (alertQueue[i].type === 'music') {
@@ -1858,11 +1681,7 @@ function TriggerAlert(iconOrOptions, textArg, avatarArg, titleArg, subtextArg) {
 		}
 	}
 
-	// Song change PRIORITAS: disisipkan sebelum event lain yang masih mengantre, tapi
-	// TETAP di belakang song change lain supaya urutan lagu tidak terbalik.
 	if (alertData.type === 'music') {
-		// Cari event NON-musik pertama dari depan: song change disisipkan tepat SEBELUMnya,
-		// otomatis di belakang semua song change lain (urutan lagu aman).
 		let insertAt = alertQueue.length;
 		for (let i = 0; i < alertQueue.length; i++) {
 			if (alertQueue[i].type !== 'music') {
@@ -1877,52 +1696,33 @@ function TriggerAlert(iconOrOptions, textArg, avatarArg, titleArg, subtextArg) {
 	ProcessAlertQueue();
 }
 
-let pendingRevealToken = 0;
-
 function ProcessAlertQueue() {
 	if (alertLocked || alertQueue.length === 0)
 		return;
 
-	// Intip alert pertama dalam antrean
 	const nextAlert = alertQueue[0];
-
-	// [Prefetch Avatar] Tunggu foto profil 100% selesai didownload SEBELUM membuka widget
-	// agar tidak blink kotak/lingkaran transparan.
 	if (nextAlert.avatar && !nextAlert._avatarLoaded) {
-		alertLocked = true; // Kunci sementara
+		alertLocked = true;
 		const imgLoader = new Image();
-		imgLoader.onload = () => {
-			nextAlert._avatarLoaded = true;
-			alertLocked = false;
-			ProcessAlertQueue(); // Lanjutkan buka widget
-		};
-		imgLoader.onerror = () => {
-			nextAlert.avatar = ''; // Hapus avatar jika gagal unduh (fallback)
-			nextAlert._avatarLoaded = true;
-			alertLocked = false;
-			ProcessAlertQueue();
-		};
+		imgLoader.onload = () => { nextAlert._avatarLoaded = true; alertLocked = false; ProcessAlertQueue(); };
+		imgLoader.onerror = () => { nextAlert.avatar = ''; nextAlert._avatarLoaded = true; alertLocked = false; ProcessAlertQueue(); };
 		imgLoader.src = nextAlert.avatar;
-		return; // Hentikan fungsi; tunggu onload memicu ulang ProcessAlertQueue
+		return;
 	}
 
-	// Jika avatar sudah didownload atau tidak butuh avatar: keluarkan dari antrean
 	const alertData = alertQueue.shift();
 	window.currentActiveAlertData = alertData;
 	alertLocked = true;
 	isAlertActive = true;
 	StopCycleTimer(); // IMMEDIATELY interrupt the looping widget!
-	
-	// Mainkan suara notifikasi KECUALI untuk alert lagu baru (music)
+
 	if (alertData.type !== 'music') {
-		alertAudio.currentTime = 0; // Ulang suara bila sebelumnya masih main
+		alertAudio.currentTime = 0;
 		alertAudio.play().catch(e => console.debug("[Geseki] Audio play diblokir oleh browser:", e));
 	}
 
-	// Dihitung SETELAH shift(): yang dihitung event yang MASIH MENUNGGU. Durasi alert yang
-	// sedang tayang diputuskan di sini dan tidak dipotong di tengah jalan supaya animasi
-	// pop tidak ter-clip. Alert lagu (type 'music') memakai durasi Info Rotation; bila
-	// teksnya marquee, durasi diperpanjang otomatis.
+	// Dihitung SETELAH shift(): yang dihitung event yang MASIH MENUNGGU, dan
+	// durasi alert yang sedang tayang tidak dipotong (animasi pop tidak ter-clip).
 	let currentAlertDuration;
 	if (alertData.type === 'music') {
 		currentAlertDuration = musicAlertDuration;
@@ -1935,8 +1735,7 @@ function ProcessAlertQueue() {
 
 	const { icon, text, title, subtext, avatar, type, rightIcon } = alertData;
 
-	// Avatar sudah 100% didownload di atas (Prefetch Avatar), jadi aman disuntikkan tanpa
-	// efek berkedip/hitam.
+	// Profile picture handling
 	if (avatar && islandAvatar) {
 		islandAvatar.src = avatar;
 		islandAvatar.classList.remove('hidden');
@@ -1977,9 +1776,7 @@ function ProcessAlertQueue() {
 		}
 	}
 
-	// Trigger animation on the dynamic island.
-	// Alert lagu (type 'music') TIDAK memakai .alert-active: pill tetap berukuran Info
-	// Rotation (40px, single-line) seperti panel date/time.
+	// Alert musik: pill membesar jadi music big hanya bila enableDynamicStyleBig.
 	if (type === 'music') {
 		if (enableDynamicStyleBig) {
 			dynamicIsland.classList.add('alert-active', 'alert-music-big');
@@ -1999,12 +1796,11 @@ function ProcessAlertQueue() {
 			const pB3 = "M0,16 L0,11 C20,11 35,5 65,5 C80,5 90,11 100,11 L100,16 Z";
 
 			
-			// Progress bar polos: warna solid palet. Blob wave (svgBlobAnimated / svgBlobStatic)
-			// tidak lagi dipakai - tidak ada sisa string SVG animasi yang tidak terpakai.
+			// Progress bar polos: warna solid palet (blob wave sudah dihapus).
 			
 			const scrubFill = document.querySelector('.scrub-fill');
 			if (scrubFill) {
-				// Progress bar polos: warna solid palet, TANPA wave dance.
+				// Progress bar polos: warna solid palet, tanpa wave dance.
 				scrubFill.style.setProperty('--accent-color', color);
 				scrubFill.style.backgroundImage = 'none';
 			}
@@ -2056,53 +1852,9 @@ function ProcessAlertQueue() {
 	setTimeout(() => {
 		if (alertQueue.length > 0) {
 			alertLocked = false;
-			// [UX] Keluar song change Big MENUJU ALERT BERIKUTNYA: sembunyikan konten, tulis konten
-			// alert baru (tak terlihat) supaya pill morph ke ukuran yang BENAR, lalu fade-in di
-			// ~400ms. Dilewati bila alert berikutnya juga music big (tidak ada penyusutan).
-			const nextAlert = alertQueue[0];
-			const nextIsBig = nextAlert && nextAlert.type === 'music' && enableDynamicStyleBig;
-			const topRow = document.getElementById('islandTopRow');
-
-			// Token transisi, BUKAN currentActiveAlertData: alert berikutnya bisa lewat jalur
-			// prefetch avatar, yang mengembalikan ProcessAlertQueue sebelum currentActiveAlertData
-			// diganti. Token SELALU dinaikkan dulu supaya reveal lama batal.
-			pendingRevealToken = (pendingRevealToken || 0) + 1;
-			const myToken = pendingRevealToken;
-
-			if (type === 'music' && enableDynamicStyleBig) {
-				if (!nextIsBig) {
-					// Alert berikutnya BUKAN music big: sembunyikan dulu supaya pill morph ke ukuran
-					// benar, lalu fade-in di 400ms.
-					if (topRow) topRow.style.visibility = 'hidden';
-				} else {
-					// Alert berikutnya JUGA music big: pill tidak menyusut, tidak perlu sembunyikan.
-					// Pulihkan visibility yang mungkin masih 'hidden' - kalau tidak, lagu berikutnya tak
-					// pernah terlihat.
-					if (topRow) topRow.style.visibility = '';
-				}
-			}
-
 			ProcessAlertQueue(); // Show next alert in queue immediately
-
-			if (type === 'music' && enableDynamicStyleBig && !nextIsBig) {
-				setTimeout(() => {
-					if (myToken !== pendingRevealToken) return; // hide lain mengambil alih
-					if (topRow) {
-						topRow.style.visibility = '';
-						topRow.classList.remove('ambient-fade-in');
-						void topRow.offsetWidth;
-						topRow.classList.add('ambient-fade-in');
-					}
-				}, 400);
-			}
-			} else {
-				// All alerts completed: resume ambient looping widget!
-			// [UX] Simetris dengan saat mekar: easing TANPA overshoot selama menyusut keluar dari
-			// music big, lalu lepas lagi.
-			if (type === 'music' && enableDynamicStyleBig) {
-				dynamicIsland.classList.add('morph-no-overshoot');
-				setTimeout(() => dynamicIsland.classList.remove('morph-no-overshoot'), 600);
-			}
+		} else {
+			// All alerts completed: resume ambient looping widget!
 			dynamicIsland.classList.remove('alert-active', 'alert-pop', 'alert-music-big');
 			document.getElementById('musicBigExtra').classList.add('hidden');
 			if (islandAvatar) {
@@ -2119,32 +1871,10 @@ function ProcessAlertQueue() {
 				islandSubtext.classList.add('hidden');
 				islandSubtext.textContent = '';
 			}
-			// [UX] Keluar song change (music): sembunyikan konten SEBELUM pill menyusut supaya pill
-			// menyusut LANGSUNG ke ukuran konten ambient yang benar.
-			// Urutan: 1) visibility:hidden  2) class alert dihapus + konten ambient ditulis (tak
-			// terlihat)  3) pill menyusut ke ukuran final  4) ~400ms: konten ambient fade-in.
-			// Langkah 2 HARUS melewati guard isAlertActive, kalau tidak konten tidak pernah
-			// tertulis dan pill menyusut memakai ukuran konten lagu.
-			// PENGECUALIAN: bila Dynamic Style Big NONAKTIF, pill tidak pernah membesar jauh -
-			// konten ambient langsung tampil, tanpa sembunyi & tanpa timer reveal.
-			let needRevealAmbient = false;
-			if (type === 'music' && enableDynamicStyleBig) {
-				const topRow = document.getElementById('islandTopRow');
-				if (topRow) topRow.style.visibility = 'hidden';
-				islandIcon.classList.remove('hidden');
-				SyncIconWrapHidden();
-				isAlertActive = false;          // buka guard sebentar
-				UpdateInfoText(true, true);
-				RefreshMusicWaveIcon();
-				isAlertActive = true;           // kunci lagi sampai timer reveal
-				needRevealAmbient = true;
-			} else {
-				islandIcon.classList.remove('hidden');
-				SyncIconWrapHidden();
-			}
+			islandIcon.classList.remove('hidden');
+			SyncIconWrapHidden();
 
-			// [UX] Lompati panel 'music' di rotasi bila alert yang baru selesai adalah songchange:
-			// widget tidak mengulang musik ambient untuk lagu yang sama.
+			// [UX] Lompati panel music setelah alert songchange agar tidak mengulang lagu sama.
 			if (type === 'music') {
 				const musicPanelIdx = infoPanels.findIndex(p => p.id === 'music');
 				if (musicPanelIdx !== -1 && currentPanelIndex === musicPanelIdx) {
@@ -2154,53 +1884,23 @@ function ProcessAlertQueue() {
 						attempts++;
 					} while (infoPanels[currentPanelIndex].skip && infoPanels[currentPanelIndex].skip() && attempts < infoPanels.length);
 				}
-				// Panel sudah digeser: tulis ulang konten ambient yang benar.
-				isAlertActive = false;
-				UpdateInfoText(true, true);
-				RefreshMusicWaveIcon();
-				isAlertActive = true;
 			}
 
 			isAlertActive = false;
 			alertLocked = false;
 			window.currentActiveAlertData = null;
-
-			// [UX] Langkah 4: tampilkan kembali konten ambient di ~80% transisi menyusut (400ms dari
-			// 500ms), fade-in 150ms. StartCycleTimer dipindah ke sini: cycle tidak boleh tick di
-			// tengah jendela delay (mencegah double render ambient). Saat Big nonaktif, lompat -
-			// konten ambient tampil seketika.
-			if (needRevealAmbient) {
-				let revealed = false;
-				const revealAmbient = () => {
-					if (revealed || isAlertActive) return;
-					revealed = true;
-					clearTimeout(revealTimer);
-					const topRow = document.getElementById('islandTopRow');
-					if (topRow) {
-						topRow.style.visibility = '';
-						topRow.classList.remove('ambient-fade-in');
-						void topRow.offsetWidth;
-						topRow.classList.add('ambient-fade-in');
-					}
-					StartCycleTimer();
-				};
-				const revealTimer = setTimeout(revealAmbient, 400);
-				// Saat Big nonaktif, music sudah ditulis di atas dan timer reveal dilewati - cukup
-				// jalankan cycle.
-				} else if (type !== 'music') {
-				UpdateInfoText(true, true);
-				RefreshMusicWaveIcon();
-				StartCycleTimer();
-			} else {
-				StartCycleTimer();
-			}
+			
+			// Langsung mainkan bounce kecil yang ringan bersamaan dengan transisi kembali
+			UpdateInfoText(true, true);
+			RefreshMusicWaveIcon();
+			StartCycleTimer();
 		}
 	}, currentAlertDuration);
 }
 
 // Global test helpers for preview / dev
 const testUser = 'sekisungkarak';
-const testAvatar = '../resources/sekisungkarak_avatar.jpeg';
+const testAvatar = '../../resources/sekisungkarak_avatar.jpeg';
 
 window.testFollow = function () {
 	const msg = urlParams.get("followMessage") || "followed!";
@@ -2251,8 +1951,7 @@ window.testGift = function () {
 	});
 };
 
-// Test first chatter: chat pertama dari seorang user. Teks dipotong 30 char, sama
-// seperti jalur live (case 'chat').
+// Test first chatter: teks dipotong 30 char seperti jalur live.
 window.testFirstChatter = function () {
 	const msg = urlParams.get("firstChatterMessage") || "Lorem ipsum dolor sit amet, laboris dolor do sunt.";
 	const message = msg.length > 30 ? msg.slice(0, 30) + '…' : msg;
@@ -2293,7 +1992,7 @@ window.testWidget = function() {
 window.testAlert = TriggerAlert;
 window.ALERT_ICONS = ALERT_ICONS;
 
-// Broadcaster receiver: test murni & live update dari jendela Pengaturan / tab lain.
+// Broadcaster receiver untuk menerima test murni & live update dari jendela Pengaturan / Tab lain (OBS dll)
 window.setWidgetScale = function(scale) {
 	if (!dynamicIsland) return;
 	let t = "translateX(-50%)";
@@ -2318,8 +2017,8 @@ if (window.BroadcastChannel) {
 		} else if (event.data.type === 'set_scale') {
 			window.setWidgetScale(event.data.scale);
 		} else if (event.data.type === 'callFunction') {
-			// Perintah dari settings page (mis. tombol Reset First Chatter), lewat BroadcastChannel
-			// supaya menjangkau instance OBS di luar settings page.
+			// Perintah dari settings page lewat BroadcastChannel agar menjangkau
+			// instance OBS, bukan cuma preview.
 			const fn = window[event.data.fn];
 			if (typeof fn === 'function') {
 				try {
@@ -2452,9 +2151,9 @@ if (client) {
 	});
 }
 
-////////////////////////////////////////
+///////////////////
 // TIKTOK CLIENT //
-////////////////////////////////////////
+///////////////////
 
 const tikFinityStatus = { connected: false, disconnected: false, error: false };
 const indoFinityStatus = { connected: false, disconnected: false, error: false };
@@ -2625,8 +2324,7 @@ async function indofinityConnection() {
 	return connect();
 }
 
-// Riwayat first chatter DIPERTAHANKAN lintas reload (localStorage). Hanya dibersihkan
-// via tombol Reset (window.ResetFirstChatter) atau saat live dimulai dari aplikasi.
+// Riwayat first chatter DIPERTAHANKAN lintas reload (localStorage).
 const FC_STORAGE_KEY = 'geseki_first_chatters';
 
 function LoadFirstChatters() {
@@ -2635,7 +2333,7 @@ function LoadFirstChatters() {
 		if (!raw) return;
 		const arr = JSON.parse(raw);
 		if (Array.isArray(arr)) arr.forEach(id => firstChatters.add(String(id)));
-	} catch (e) { /* abaikan: storage penuh / nonaktif */ }
+	} catch (e) { /* abaikan */ }
 }
 
 function SaveFirstChatters() {
@@ -2654,10 +2352,9 @@ function ResetFirstChatter() {
 }
 window.ResetFirstChatter = ResetFirstChatter;
 
-// Terima panggilan fungsi dari settings page (postMessage). Diperlukan karena settings
-// page TIDAK bisa memakai contentWindow[fn]?.(): bila widget menjalani redirect
-// internal (index.html -> obs/index.html), referensi contentWindow menjadi basi dan
-// panggilan dilewati tanpa error. Pesan ini tiba terlepas dari redirect.
+// Terima panggilan fungsi dari settings page (postMessage). contentWindow[fn]
+// tidak bisa dipakai: redirect internal (index.html -> obs/index.html)
+// membuat referensinya basi. Pesan ke elemen iframe lolos dari masalah itu.
 window.addEventListener('message', (event) => {
 	const data = event.data;
 	if (!data || data.type !== 'geseki:callFunction') return;
@@ -2674,8 +2371,6 @@ function handleTikTokEvent(event, tiktokData, source) {
 	if (!tiktokData) return;
 
 	const userName = tiktokData.nickname || tiktokData.uniqueId || 'Someone';
-	// Username dibatasi 20 karakter (sama seperti first chatter) supaya marquee tidak
-	// berjalan terlalu jauh dan pill tetap proporsional.
 	const displayUser = userName.length > 20 ? userName.slice(0, 20) + '…' : userName;
 	const avatar = tiktokData.profilePictureUrl || tiktokData.profilePicture || tiktokData.avatarThumb || tiktokData.user?.profilePictureUrl || '';
 
@@ -2692,14 +2387,12 @@ function handleTikTokEvent(event, tiktokData, source) {
 				if (message.length > 30) {
 					message = message.slice(0, 30) + '…';
 				}
-				// Username dibatasi 20 karakter supaya marquee tidak berjalan terlalu jauh.
-				const displayName = displayUser;
 
 				TriggerAlert({
 					icon: 'https://img.icons8.com/fluency-systems-filled/96/FFFFFF/chat.png',
-					title: displayName,
+					title: displayUser,
 					subtext: message,
-					text: `${displayName}: ${message}`,
+					text: `${userName}: ${message}`,
 					avatar: avatar
 				});
 			}
@@ -2717,7 +2410,7 @@ function handleTikTokEvent(event, tiktokData, source) {
 
 		case 'gift': {
 			if (!enableGift) return;
-			// Streak handling: bila gift streak berulang, tunggu sampai streak berakhir.
+			// Gift streak berulang: tunggu sampai streak selesai.
 			if (tiktokData.giftType === 1 && !tiktokData.repeatEnd) {
 				return;
 			}
@@ -2741,7 +2434,7 @@ function handleTikTokEvent(event, tiktokData, source) {
 			TriggerAlert({
 				icon: ALERT_ICONS.subscribe,
 				text: `${displayUser} ${subscribeMessage.replaceAll('{name}', displayUser)}`,
-				title: displayUser,
+			title: displayUser,
 			subtext: subscribeMessage.replaceAll('{name}', displayUser),
 				avatar: avatar
 			});
@@ -2753,7 +2446,7 @@ function handleTikTokEvent(event, tiktokData, source) {
 			TriggerAlert({
 				icon: ALERT_ICONS.follow,
 				text: `${displayUser} ${followMessage.replaceAll('{name}', displayUser)}`,
-				title: displayUser,
+			title: displayUser,
 			subtext: followMessage.replaceAll('{name}', displayUser),
 				avatar: avatar
 			});
@@ -2765,7 +2458,7 @@ function handleTikTokEvent(event, tiktokData, source) {
 			TriggerAlert({
 				icon: ALERT_ICONS.share,
 				text: `${displayUser} ${shareMessage.replaceAll('{name}', displayUser)}`,
-				title: displayUser,
+			title: displayUser,
 			subtext: shareMessage.replaceAll('{name}', displayUser),
 				avatar: avatar
 			});

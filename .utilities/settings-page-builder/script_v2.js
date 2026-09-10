@@ -1,8 +1,6 @@
-// Geseki settings-page-builder — ChatRD-style settings page (Web Awesome).
-// Loads a declarative settings.json (passed as ?settingsJson=) and renders
-// collapsible section cards per group, with a live widget preview iframe.
-
-// Search parameters
+// Geseki settings-page-builder — halaman settings (Web Awesome).
+// Memuat settings.json (?settingsJson=) lalu merender kartu section,
+// lengkap dengan iframe pratinjau widget.
 const queryString = window.location.search;
 const urlParams = new URLSearchParams(queryString);
 let settingsJson = urlParams.get("settingsJson");
@@ -17,17 +15,123 @@ if (!widgetURL) {
 }
 const showUnmuteIndicator = GetBooleanParam("showUnmuteIndicator", false);
 
+// Mode DASHBOARD: halaman untuk dock OBS. Tanpa pratinjau & tanpa loading.
+const isDashboardMode = urlParams.get('dashboard') === '1';
+if (isDashboardMode) {
+    document.body.classList.add('dashboard-mode');
+    // Loading tetap dipakai (tanpa kunci scroll & jeda minimum).
+}
+
+// ── Tahan tampilan sampai WebAwesome terdefinisi ─────────────
+const WA_TAGS = [
+    'wa-details', 'wa-input', 'wa-select', 'wa-option', 'wa-button',
+    'wa-badge', 'wa-switch', 'wa-slider', 'wa-number-input',
+    'wa-color-picker'
+];
+
+if (isDashboardMode) document.body.classList.add('wa-pending');
+
+// Penanda settings.json selesai diproses — gerbang tampilan menunggu ini,
+// bukan sekadar definisi elemen, supaya Load scene tidak memicu FOUC ulang.
+let settingsReady = false;
+const settingsReadyPromise = new Promise(resolve => {
+    window.__markSettingsReady = () => {
+        settingsReady = true;
+        resolve();
+    };
+});
+
+// Hanya tag yang BENAR-BENAR ada di dokumen yang ditunggu.
+function WaitForWebAwesome(timeoutMs = 1200) {
+    const present = WA_TAGS.filter(tag => document.getElementsByTagName(tag).length > 0);
+    const definitions = present.map(tag => customElements.whenDefined(tag));
+    const timeout = new Promise(resolve => setTimeout(resolve, timeoutMs));
+    return Promise.race([Promise.all(definitions), timeout]);
+}
+
+// Panel tampil setelah WebAwesome terdefinisi DAN settings.json selesai.
+Promise.all([WaitForWebAwesome(), settingsReadyPromise])
+    .then(() => document.body.classList.remove('wa-pending'));
+
+// Pengaman mutlak: jangan pernah biarkan panel terkunci selamanya
+// bila salah satu promise di atas tak kunjung selesai.
+setTimeout(() => document.body.classList.remove('wa-pending'), 8000);
+
 const bc = window.BroadcastChannel ? new BroadcastChannel('geseki_island_channel') : null;
 
 // Page elements
 const settingsPanel = document.getElementById('settingsPanel');
-const widgetPreview = document.getElementById('widgetPreview');
-const unmuteLabel = document.getElementById('unmute-label');
+const previewContainer = document.getElementById('preview');
+
+// Layar loading tampil minimal selama ini (ms) supaya tidak sekadar berkedip.
+const MIN_LOADING_MS = 1000;
+const pageLoadStart = Date.now();
+
+// Pratinjau pakai double-buffering: iframe baru dimuat tersembunyi dulu,
+// baru diswap setelah DOM-nya siap — menghilangkan flash putih saat refresh.
+let activeIframe = document.createElement('iframe');
+activeIframe.id = 'widgetPreview';
+if (!isDashboardMode) previewContainer.appendChild(activeIframe);
+
+let pendingIframe = null;
+let refreshDebounceTimer = null;
+
+// Tipe yang diketik: debounce panjang agar iframe reload sekali setelah
+// user berhenti mengetik. Kontrol diskrit tetap instan.
+const REFRESH_DEBOUNCE_MS = {
+    text: 800,
+    font: 800,
+    number: 800,
+    slider: 250,   // drag = rentetan event, tapi nilainya berubah halus
+};
+const DEFAULT_REFRESH_DEBOUNCE_MS = 30;
+
+// Panggil fungsi di dalam pratinjau. WAJIB lewat postMessage, bukan
+// contentWindow[fn]?.(): referensi contentWindow basi setelah redirect
+// internal widget, sehingga panggilan dilewati tanpa error. postMessage
+// menembus redirect dan tetap sampai setelah buffer-swap. Fallback
+// contentWindow dipertahankan untuk widget lama tanpa listener pesan.
+function CallWidgetFunction(fnName, args = []) {
+    if (!fnName) return;
+
+    // 1) BroadcastChannel — satu-satunya jalur ke widget sungguhan (OBS/TTLS)
+//    yang berjalan di konteks teratas, bukan iframe halaman ini.
+    if (bc) {
+        try {
+            bc.postMessage({ type: 'callFunction', fn: fnName, args });
+        } catch (e) { /* abaikan */ }
+    }
+
+    // 2) Pratinjau: postMessage ke iframe aktif + pending (redirect internal
+//    membuat contentWindow basi).
+    const payload = { type: 'callFunction', fn: fnName, args };
+    [activeIframe, pendingIframe].forEach((frame) => {
+        if (!frame || !frame.contentWindow) return;
+        try { frame.contentWindow.postMessage(payload, '*'); } catch (e) {}
+    });
+
+    // 3) Fallback: widget lama tanpa listener pesan.
+    try {
+        if (typeof activeIframe?.contentWindow?.[fnName] === 'function') {
+            activeIframe.contentWindow[fnName](...args);
+        }
+    } catch (e) { /* abaikan */ }
+}
+
+// Expose widgetPreview accessor so existing script functions (contentWindow calls) work smoothly
+Object.defineProperty(window, 'widgetPreview', {
+    get: () => activeIframe,
+    configurable: true
+});
+
+const unmuteLabel = document.createElement('label');
+unmuteLabel.id = 'unmute-label';
+unmuteLabel.textContent = 'Click to unmute...';
+unmuteLabel.style.display = 'none';
+previewContainer.appendChild(unmuteLabel);
 const widgetTitle = document.getElementById('widgetTitle');
-const copyUrlButton = document.getElementById('copyUrlButton');
-const loadDefaultsButton = document.getElementById('loadDefaultsButton');
-const openImportModalButton = document.getElementById('openImportModal');
-const importModal = document.getElementById('modalUrlImport');
+// Tombol lama (Copy URL / Load Defaults / Load Settings) DIHAPUS.
+// Widget kini dimasukkan ke OBS otomatis lewat tombol Save.
 const loadDefaultsModal = document.getElementById('modalLoadDefaults');
 
 // Global variables
@@ -48,7 +152,7 @@ const keyPrefix = (() => {
 })();
 
 // Header: widget name derived from the widget folder name (kebab-case -> Title Case)
-if (keyPrefix) {
+if (keyPrefix && widgetTitle) {
     widgetTitle.textContent = keyPrefix
         .split(/[-_]/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -80,16 +184,6 @@ if (headerLogo) {
 if (showUnmuteIndicator)
     unmuteLabel.style.display = 'inline';
 
-importModal.querySelector('#importUrl').placeholder = `${widgetURL}?...`;
-
-// Modals: cancel buttons close, save/confirm buttons act
-importModal.querySelector('.button.cancel').addEventListener('click', () => importModal.open = false);
-importModal.querySelector('.button.save').addEventListener('click', () => {
-    const urlInput = importModal.querySelector('#importUrl');
-    ImportSettings(urlInput.value.trim());
-    urlInput.value = '';
-    importModal.open = false;
-});
 
 loadDefaultsModal.querySelector('.button.cancel').addEventListener('click', () => loadDefaultsModal.open = false);
 loadDefaultsModal.querySelector('.button.save').addEventListener('click', () => {
@@ -134,31 +228,342 @@ async function CopyToClipboard(text) {
     return true;
 }
 
-copyUrlButton.addEventListener('click', async () => {
-    const defaultHTML = copyUrlButton.innerHTML;
-    try {
-        const url = BuildWidgetURL();
-        const success = await CopyToClipboard(url);
-        if (success) {
-            copyUrlButton.innerHTML = 'Copied!';
-            copyUrlButton.classList.add('copied');
 
-            setTimeout(() => {
-                copyUrlButton.innerHTML = defaultHTML;
-                copyUrlButton.classList.remove('copied');
-            }, 3000);
+// ── Tombol Save / Reset (dashboard OBS) ───────────────────────────
+const saveObsButton = document.getElementById('saveObsButton');
+const resetObsButton = document.getElementById('resetObsButton');
+
+function SetFooterButtonState(btn, text, ok) {
+    if (!btn) return;
+    // Label tombol Load dinamis, jadi selalu baca ulang dari dataset.baseLabel
+// — kalau disimpan sekali, teks basi akan dikembalikan setelah scene ganti.
+    const original = btn.dataset.baseLabel || btn.textContent;
+
+    // Ikon: centang bila berhasil, silang bila gagal. Tulis HANYA ke span teks
+// agar <span class="load-btn-scene"> tidak hilang dan hover tidak rusak.
+    const textSpan = btn.querySelector('.load-btn-text');
+    const target = textSpan || btn;
+
+    const icon = ok === true ? '<i class="ri-check-line"></i>'
+        : ok === false ? '<i class="ri-close-line"></i>' : '';
+
+    target.innerHTML = `${icon} ${text}`;
+    btn.classList.toggle('copied', ok === true);
+    btn.classList.toggle('obs-error', ok === false);
+
+    // Sembunyikan nama scene selama status tampil, lalu munculkan lagi.
+    const sceneSpan = btn.querySelector('.load-btn-scene');
+    if (sceneSpan) sceneSpan.style.display = 'none';
+
+    setTimeout(() => {
+        if (sceneSpan) sceneSpan.style.display = '';
+        target.textContent = btn.dataset.baseLabel || original;
+        btn.classList.remove('copied', 'obs-error');
+    }, 3000);
+}
+
+if (saveObsButton) {
+    saveObsButton.addEventListener('click', async () => {
+        try {
+            // 1) Simpan settings SEBELUM sinkron OBS: GetObsConfig() membaca dari
+//    settingsMap, jadi kalau disimpan sesudahnya perubahan baru terbaca
+//    pada klik Save berikutnya.
+            SaveSettingsToStorage();
+
+            // 2) Bangun URL widget terbaru
+            const url = BuildWidgetURL();
+
+            // 3) Buat / update browser source di scene aktif
+            const result = await ObsSyncBrowserSource(url);
+
+            // 4) Simpan juga sebagai profil scene, supaya bisa dimuat
+            //    lagi lewat tombol Load.
+            if (result.sceneName) {
+                SaveSettingsForScene(result.sceneName);
+                // Tandai profil ini sebagai pilihan aktif.
+                SetSelectedScene(result.sceneName);
+            }
+
+            SetFooterButtonState(
+                saveObsButton,
+                result.created ? `Saved — source dibuat: ${result.name}`
+                    : `Saved — ${result.name} diperbarui`,
+                true
+            );
+        } catch (err) {
+            console.error('[OBS Save]', err);
+            SetFooterButtonState(saveObsButton, 'Gagal: ' + err.message, false);
         }
-    } catch (err) {
-        console.error('[Copy URL] Error:', err);
-        copyUrlButton.innerHTML = '<i class="ri-error-warning-line"></i> Error';
-        setTimeout(() => {
-            copyUrlButton.innerHTML = defaultHTML;
-        }, 3000);
+    });
+}
+
+const resetConfirmModal = document.getElementById('modalResetConfirm');
+const loadObsButton = document.getElementById('loadObsButton');
+const loadSceneModal = document.getElementById('modalLoadScene');
+const sceneDropdown = document.getElementById('sceneDropdown');
+const sceneToggle = document.getElementById('sceneDropdownToggle');
+const sceneMenu = document.getElementById('sceneDropdownMenu');
+const sceneLabel = document.getElementById('sceneDropdownLabel');
+
+// Nilai yang sedang dipilih. Disimpan terpisah karena dropdown-nya
+// kustom (bukan <wa-select>), jadi tidak ada .value bawaan.
+let selectedScene = '';
+
+// Teks penjelas di bawah dropdown (dipakai RenderSceneMenu juga).
+const sceneHintEl = document.getElementById('sceneHint');
+
+function CloseSceneMenu() {
+    if (sceneMenu) sceneMenu.hidden = true;
+}
+
+// Pilihan terakhir disimpan agar hover tombol Load tetap
+// menampilkan "Current: …" setelah halaman di-reload.
+// `selectedScene` sendiri hanya hidup di memori.
+const LAST_SCENE_KEY = 'geseki-last-scene';
+
+function ReadLastScene() {
+    try {
+        const v = localStorage.getItem(LAST_SCENE_KEY) || '';
+        if (!v) return '';
+        // Hanya pakai bila profilnya masih ada — bisa saja sudah dihapus sesi lalu.
+// PENTING: jangan panggil ListSavedScenes() di sini; SCENE_SETTINGS_PREFIX
+// belum dievaluasi -> ReferenceError (TDZ) yang tertelan catch. Cek
+// localStorage langsung dengan prefix literal.
+        return localStorage.getItem('geseki-scene-' + v) ? v : '';
+    } catch (e) {
+        return '';
     }
+}
+
+function WriteLastScene(name) {
+    try {
+        if (name) localStorage.setItem(LAST_SCENE_KEY, name);
+        else localStorage.removeItem(LAST_SCENE_KEY);
+    } catch (e) { /* abaikan */ }
+}
+
+function SetSelectedScene(name) {
+    selectedScene = name || '';
+    WriteLastScene(selectedScene);
+    if (sceneLabel) sceneLabel.textContent = selectedScene || 'Pilih scene...';
+    // Tombol Load mengikuti pilihan, jadi perbarui labelnya juga.
+    RefreshLoadButtonLabel();
+}
+
+// Hapus profil scene. Mengembalikan true bila berhasil.
+function DeleteSceneSettings(scene) {
+    try {
+        localStorage.removeItem(SceneStorageKey(scene));
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function RenderSceneMenu(scenes) {
+    if (!sceneMenu) return;
+    sceneMenu.innerHTML = '';
+
+    scenes.forEach(({ scene }) => {
+        const row = document.createElement('div');
+        row.className = 'scene-option';
+
+        const nameBtn = document.createElement('button');
+        nameBtn.type = 'button';
+        nameBtn.className = 'scene-option-name';
+        nameBtn.textContent = scene;
+        nameBtn.addEventListener('click', () => {
+            SetSelectedScene(scene);
+            CloseSceneMenu();
+        });
+
+        // Tombol silang: hapus profil scene ini.
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'scene-option-delete';
+        delBtn.title = `Hapus settings "${scene}"`;
+        delBtn.innerHTML = '<i class="ri-close-line"></i>';
+        delBtn.addEventListener('click', async (ev) => {
+            // Hentikan propagasi supaya baris tidak ikut terpilih.
+            ev.stopPropagation();
+
+            // DUA LANGKAH, tanpa confirm() bawaan browser: klik
+            // pertama mengaktifkan, klik kedua benar-benar menghapus.
+            if (delBtn.dataset.armed !== '1') {
+                delBtn.dataset.armed = '1';
+                delBtn.classList.add('armed');
+                delBtn.title = 'Klik sekali lagi untuk menghapus';
+                setTimeout(() => {
+                    if (!delBtn.isConnected) return;
+                    delBtn.dataset.armed = '';
+                    delBtn.classList.remove('armed');
+                    delBtn.title = `Hapus source & settings "${scene}"`;
+                }, 3000);
+                return;
+            }
+
+            // Hapus DUA-DUANYA: source di OBS + profil tersimpan.
+            let removed = [];
+            let obsError = null;
+            try {
+                removed = await ObsDeleteSourcesForScene(scene);
+            } catch (e) {
+                obsError = e;
+            }
+            const settingsRemoved = DeleteSceneSettings(scene);
+
+            if (obsError && !settingsRemoved) {
+                SetFooterButtonState(loadObsButton, 'Gagal: ' + obsError.message, false);
+                return;
+            }
+
+            // Kalau yang dihapus sedang dipilih, kosongkan pilihan.
+            if (selectedScene === scene) SetSelectedScene('');
+            const remaining = ListSavedScenes();
+            RenderSceneMenu(remaining);
+            if (sceneHintEl) {
+                sceneHintEl.textContent = remaining.length
+                    ? ''
+                    : 'Belum ada settings tersimpan. Klik Save dulu di suatu scene.';
+            }
+
+            const msg = removed.length
+                ? `Dihapus: ${removed.length} source`
+                : 'Settings dihapus (source tidak ditemukan)';
+            SetFooterButtonState(
+                loadObsButton,
+                msg,
+                !obsError
+            );
+        });
+
+        row.appendChild(nameBtn);
+        row.appendChild(delBtn);
+        sceneMenu.appendChild(row);
+    });
+}
+
+// "Current" = saved settings yang TERAKHIR DIPILIH di popup Load.
+// Bukan scene OBS yang sedang aktif. Karenanya cukup memakai
+// `selectedScene` — tidak perlu pelacakan terpisah.
+// Label tombol TETAP "Load". Nama tidak ditulis di tombol — cukup
+// muncul saat hover, supaya lebar tombol tidak berubah-ubah.
+function RefreshLoadButtonLabel() {
+    if (!loadObsButton) return;
+    loadObsButton.dataset.baseLabel = 'Load';
+
+    // Nama ditaruh DI DALAM tombol (bukan tooltip native), lalu
+    // dimunculkan lewat CSS saat kursor mengarah ke tombol.
+    const sceneSpan = document.getElementById('loadSceneName');
+    if (sceneSpan) {
+        sceneSpan.textContent = selectedScene
+            ? `Current: ${selectedScene}`
+            : '';
+    }
+
+    if (!loadObsButton.classList.contains('copied')
+        && !loadObsButton.classList.contains('obs-error')) {
+        const textSpan = loadObsButton.querySelector('.load-btn-text');
+        if (textSpan) textSpan.textContent = 'Load';
+    }
+}
+
+if (loadObsButton && loadSceneModal) {
+    loadSceneModal.querySelector('.button.cancel')
+        .addEventListener('click', () => loadSceneModal.open = false);
+
+    loadSceneModal.querySelector('.button.save')
+        .addEventListener('click', () => {
+            if (!selectedScene) {
+                SetFooterButtonState(loadObsButton, 'Pilih scene dulu', false);
+                return;
+            }
+            try {
+                LoadSettingsForScene(selectedScene);
+                loadSceneModal.open = false;
+                SetFooterButtonState(loadObsButton, `Dimuat: ${selectedScene}`, true);
+                RefreshLoadButtonLabel();
+            } catch (err) {
+                SetFooterButtonState(loadObsButton, 'Gagal: ' + err.message, false);
+            }
+        });
+
+    // Buka/tutup menu dropdown.
+    if (sceneToggle && sceneMenu) {
+        sceneToggle.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            sceneMenu.hidden = !sceneMenu.hidden;
+        });
+        // Klik di mana pun di luar menutup menu.
+        document.addEventListener('click', (ev) => {
+            if (sceneDropdown && !sceneDropdown.contains(ev.target)) CloseSceneMenu();
+        });
+    }
+
+    loadObsButton.addEventListener('click', async () => {
+        // Isi dropdown dari profil tersimpan.
+        const scenes = ListSavedScenes();
+        RenderSceneMenu(scenes);
+        CloseSceneMenu();
+
+        // Pilih scene aktif bila profilnya ada.
+        const current = await ObsGetCurrentSceneName();
+        SetSelectedScene(
+            (current && scenes.some(s => s.scene === current))
+                ? current
+                : (scenes[0]?.scene || '')
+        );
+
+        if (sceneHintEl) {
+            sceneHintEl.textContent = scenes.length
+                ? ''
+                : 'Belum ada settings tersimpan. Klik Save dulu di suatu scene.';
+        }
+
+        loadSceneModal.open = true;
+    });
+
+    // Pulihkan pilihan terakhir dari localStorage, supaya hover
+    // langsung menampilkan "Current: …" tanpa harus buka popup dulu.
+    SetSelectedScene(ReadLastScene());
+
+    // Tidak ada lagi setInterval: label hanya berganti saat pengguna
+    // memilih/memuat/menghapus, bukan karena scene OBS berganti.
+}
+
+resetConfirmModal.querySelector('.button.cancel').addEventListener('click', () => resetConfirmModal.open = false);
+// Pengaturan yang TIDAK boleh dihapus tombol Reset.
+// Koneksi OBS adalah konfigurasi aplikasi, bukan tampilan widget —
+// kalau ikut tereset, pengguna harus memasukkan ulang IP/password
+// setiap kali reset, lalu Save gagal tanpa sebab yang jelas.
+const RESET_PRESERVE_IDS = ['obsAddress', 'obsPort', 'obsPassword'];
+
+resetConfirmModal.querySelector('.button.save').addEventListener('click', () => {
+    // Simpan dulu nilai yang ingin dipertahankan...
+    const preserved = {};
+    RESET_PRESERVE_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) preserved[id] = el.value;
+        else if (settingsMap.has(id)) preserved[id] = settingsMap.get(id);
+    });
+
+    // ...lalu simpan kembali SETELAH localStorage dibersihkan oleh
+    // LoadDefaultSettings(). Catatan: LoadDefaultSettings memuat ulang
+    // halaman, jadi nilai disimpan ke localStorage secara langsung.
+    try {
+        localStorage.setItem('geseki-preserve', JSON.stringify(preserved));
+    } catch (e) { /* abaikan */ }
+
+    LoadDefaultSettings();
+    resetConfirmModal.open = false;
 });
 
-loadDefaultsButton.addEventListener('click', () => loadDefaultsModal.open = true);
-openImportModalButton.addEventListener('click', () => importModal.open = true);
+if (resetObsButton) {
+    resetObsButton.addEventListener('click', () => {
+        // Tampilkan peringatan dulu — reset menghapus semua pengaturan.
+        resetConfirmModal.open = true;
+    });
+}
 
 
 /////////////////////////////
@@ -166,10 +571,21 @@ openImportModalButton.addEventListener('click', () => importModal.open = true);
 /////////////////////////////
 
 function LoadJSON(settingsJson) {
-    fetch(settingsJson)
+    // Kembalikan promise supaya pemanggil bisa menunggu render selesai
+    // (dibutuhkan LoadDefaultSettings sebelum me-reload halaman).
+    return fetch(settingsJson)
         .then(response => response.json())
         .then(data => {
             settingsData = data;
+
+            // Sembunyikan layar loading: fade-out (.hidden), lalu display:none setelah
+// transisi selesai supaya tidak menghalangi klik.
+            HideLoadingScreen();
+
+            // Buka gerbang tampilan — settings.json sudah diproses.
+            if (typeof window.__markSettingsReady === 'function') {
+                window.__markSettingsReady();
+            }
 
             // Clear the settings panel
             settingsPanel.innerHTML = '';
@@ -191,8 +607,8 @@ function LoadJSON(settingsJson) {
             const sectionIcons = ['ri-settings-4-fill', 'ri-notification-3-fill', 'ri-palette-fill', 'ri-links-fill', 'ri-slideshow-3-fill'];
 
             const groupIconMap = {
-                'Streamer.bot Connection': 'ri-robot-2-fill',
-                'Streamerbot Connection': 'ri-robot-2-fill',
+                'Streamer.bot Connection': '../../resources/icons/platforms/streamerbot-logo.svg',
+                'Streamerbot Connection': '../../resources/icons/platforms/streamerbot-logo.svg',
                 'TikTok Connection': 'ri-tiktok-fill',
                 'General': 'ri-settings-4-fill',
                 'Alert Events': 'ri-notification-3-fill'
@@ -202,6 +618,7 @@ function LoadJSON(settingsJson) {
             for (const groupName in groupedSettings) {
                 const section = document.createElement('wa-details');
                 section.classList.add('section');
+                section.dataset.group = groupName;
 
                 // Determine whether section is expanded (open) or collapsed by default
                 let isOpen = false;
@@ -227,14 +644,20 @@ function LoadJSON(settingsJson) {
 
                 const title = document.createElement('span');
                 title.classList.add('title');
-                const icon = document.createElement('i');
                 const customIcon = data.groups?.[groupName]?.icon || groupIconMap[groupName] || sectionIcons[groupIndex % sectionIcons.length];
-                icon.className = customIcon;
+
+                // Ikon bisa berupa kelas Remix ("ri-…") ATAU berkas gambar
+                // (".svg"/".png"). Kalau gambar, pakai <img> dengan bingkai
+                // kaca yang sama (kelas .glass-icon) supaya seragam.
+                const icon = IsImageIcon(customIcon)
+                    ? BuildImageIcon(customIcon, groupName)
+                    : BuildFontIcon(customIcon);
+
                 title.appendChild(icon);
                 title.appendChild(document.createTextNode(groupName));
                 header.appendChild(title);
 
-                // ChatRD-style connection badge inside section summary
+                // Badge status koneksi di summary section
                 const badgeType = data.groups?.[groupName]?.badge;
                 if (badgeType) {
                     const checkSpan = document.createElement('span');
@@ -257,12 +680,33 @@ function LoadJSON(settingsJson) {
                     header.appendChild(checkSpan);
                 }
 
+                // Header action button (opsional: Reset First Chatter dsb)
+                const headerBtn = data.groups?.[groupName]?.button;
+                if (headerBtn) {
+                    const btn = document.createElement('wa-button');
+                    btn.textContent = headerBtn.label;
+                    btn.setAttribute('variant', 'default');
+                    // Pakai ukuran kecil agar pas di summary header
+                    btn.setAttribute('size', 'small');
+                    
+                    // Dorong ke kanan
+                    btn.style.marginLeft = badgeType ? '12px' : 'auto';
+                    if (!badgeType) btn.style.marginRight = '12px';
+                    
+                    btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        CallWidgetFunction(headerBtn.callFunction);
+                    });
+                    header.appendChild(btn);
+                }
+
                 section.appendChild(header);
 
                 groupedSettings[groupName].forEach(setting => {
                     const configRow = document.createElement('div');
                     configRow.classList.add('config');
-                    if (setting.full || setting.type === 'button') {
+                    if (setting.full) {
                         configRow.classList.add('full');
                     }
                     configRow.id = `item-${setting.id}`;
@@ -286,12 +730,11 @@ function LoadJSON(settingsJson) {
 
                     configRow.appendChild(infoDiv);
 
-                    if (setting.type !== 'button') {
-                        const elementDiv = document.createElement('div');
-                        elementDiv.classList.add('element');
-                        elementDiv.appendChild(BuildInput(setting));
-                        configRow.appendChild(elementDiv);
-                    }
+                    // Masukkan kontrol (input/tombol) ke bagian sisi kanan
+                    const elementDiv = document.createElement('div');
+                    elementDiv.classList.add('element');
+                    elementDiv.appendChild(BuildInput(setting));
+                    configRow.appendChild(elementDiv);
 
                     section.appendChild(configRow);
                 });
@@ -329,22 +772,13 @@ function LoadJSON(settingsJson) {
                         catHeader.appendChild(catTitle);
                         catSection.appendChild(catHeader);
 
-                        // Category styles so it stands out and indents children
-                        catSection.style.border = '1px solid var(--border-color)';
-                        catSection.style.marginBottom = '20px';
-                        catSection.style.background = 'var(--panel-color)';
-
+                        // Cat: liquid glass via CSS (.category-section) — tanpa inline override
                         settingsPanel.appendChild(catSection);
                         window.__categoryMap[categoryName] = catSection;
                     }
 
-                    // Nest the group section inside the category section
-                    // Add indentation styles
-                    section.style.border = 'none';
-                    section.style.borderTop = '1px solid var(--border-color)';
-                    section.style.marginBottom = '0';
-                    section.style.borderRadius = '0';
-                    section.style.boxShadow = 'none';
+                    // Nested group: padding horizontal disamakan dgn kartu luar
+                    section.classList.add('nested-section');
                     window.__categoryMap[categoryName].appendChild(section);
                 } else {
                     settingsPanel.appendChild(section);
@@ -360,6 +794,15 @@ function LoadJSON(settingsJson) {
         })
         .catch(error => {
             console.error('Error loading settings:', error);
+            // Layar loading wajib ditutup juga saat GAGAL — kalau tidak,
+            // overlay fixed z-index 1111 akan menutupi pesan error dan
+            // tombol "Coba Lagi" tidak bisa diklik.
+            HideLoadingScreen();
+            // Gagal pun wajib membuka gerbang, atau panel terkunci
+            // sampai pengaman 8 detik. Pesan error harus tetap terlihat.
+            if (typeof window.__markSettingsReady === 'function') {
+                window.__markSettingsReady();
+            }
             settingsPanel.innerHTML = `
                 <div style="text-align: center; padding: 40px 20px; color: #ff5555;">
                     <i class="ri-error-warning-line" style="font-size: 32px; margin-bottom: 12px; display: block;"></i>
@@ -369,6 +812,56 @@ function LoadJSON(settingsJson) {
                 </div>
             `;
         });
+}
+
+// ── Urutan tag Info Rotation ───────────────────────────────────────
+// `value` <wa-select multiple> mengikuti urutan <wa-option> di light DOM,
+// bukan urutan tag di layar, sehingga urutan pilihan user hilang saat
+// reload. ReadTagOrder = baca urutan nyata; ApplyTagOrder = samakan DOM.
+function ReadTagOrder(selectEl) {
+    const sr = selectEl && selectEl.shadowRoot;
+    if (!sr) return null;
+    const vals = Array.from(sr.querySelectorAll('wa-tag'))
+        .map(t => t.getAttribute('data-value'))
+        .filter(Boolean);
+    return vals.length ? vals : null;
+}
+
+
+// Ganti total <wa-select multiple>: komponen hanya membaca <wa-option> saat
+// konstruksi, jadi mutasi elemen hidup (reorder, `selected`, `value`) tidak
+// mengubah tag tampil. Bangun elemen baru dengan urutan & `selected` benar.
+function RebuildTagSelect(oldSelect, allValues, valueLabels, selectedOrder) {
+    if (!oldSelect) return null;
+    const order = [...selectedOrder, ...allValues.filter(v => !selectedOrder.includes(v))];
+    const next = document.createElement('wa-select');
+    next.setAttribute('multiple', '');
+    next.setAttribute('with-remove', '');
+    next.setAttribute('with-clear', '');
+    next.setAttribute('placeholder', oldSelect.getAttribute('placeholder') || 'Tidak ada opsi');
+    if (oldSelect.id) next.id = oldSelect.id;
+    if (oldSelect.dataset.setting) next.dataset.setting = oldSelect.dataset.setting;
+    next.maxOptionsVisible = allValues.length;
+    order.forEach(v => {
+        const opt = document.createElement('wa-option');
+        opt.value = v;
+        opt.textContent = (valueLabels && valueLabels[v]) || v;
+        if (selectedOrder.includes(v)) opt.setAttribute('selected', '');
+        next.appendChild(opt);
+    });
+    oldSelect.replaceWith(next);
+    return next;
+}
+
+function ApplyTagOrder(selectEl, order) {
+    if (!selectEl || !Array.isArray(order) || order.length === 0) return;
+    const opts = Array.from(selectEl.querySelectorAll('wa-option'));
+    // appendChild memindahkan node ke akhir; dilakukan berurutan sehingga
+    // urutan akhir DOM persis sama dengan `order`.
+    order.forEach(v => {
+        const opt = opts.find(o => o.value === v);
+        if (opt) selectEl.appendChild(opt);
+    });
 }
 
 function BuildInput(setting) {
@@ -388,6 +881,15 @@ function BuildInput(setting) {
             inputElement.value = savedValue ?? '';
             inputElement.setAttribute('autocomplete', 'off');
             break;
+
+        case 'slider':
+                    inputElement = document.createElement('wa-slider');
+                    inputElement.setAttribute('with-tooltip', '');
+                    inputElement.value = savedValue ?? '';
+                    if (setting.min !== undefined) inputElement.min = setting.min;
+                    if (setting.max !== undefined) inputElement.max = setting.max;
+                    if (setting.step !== undefined) inputElement.step = setting.step;
+                    break;
 
         case 'number':
             inputElement = document.createElement('wa-number-input');
@@ -413,6 +915,67 @@ function BuildInput(setting) {
             });
             inputElement.value = savedValue ?? '';
             break;
+
+        case 'tags': {
+            // Multi-select berupa <wa-tag> yang bisa dihapus
+            inputElement = document.createElement('wa-select');
+            inputElement.setAttribute('multiple', '');
+            inputElement.setAttribute('with-remove', '');
+            // Tombol bersihkan bawaan wa-select: hanya muncul bila ada pilihan.
+            inputElement.setAttribute('with-clear', '');
+            // Teks pengganti saat semua tag dihapus (Close / clear all).
+            inputElement.setAttribute('placeholder', setting.placeholder || 'Tidak ada opsi');
+            // Tampilkan SEMUA tag (tanpa "+N") agar tiap tag bisa dihapus satu-satu.
+// CATATAN: propertinya `maxOptionsVisible` — atributnya tidak ada.
+            inputElement.maxOptionsVisible = setting.options.length;
+            setting.options.forEach(option => {
+                const optionElement = document.createElement('wa-option');
+                optionElement.value = option.value;
+                optionElement.textContent = option.label;
+                inputElement.appendChild(optionElement);
+            });
+            const tagValue = Array.isArray(savedValue)
+                ? savedValue
+                : (Array.isArray(setting.defaultValue)
+                    ? setting.defaultValue
+                    : String(setting.defaultValue ?? '').split(',').map(v => v.trim()).filter(Boolean));
+
+            // Susun dulu <wa-option> sesuai urutan tersimpan: wa-select
+            // merender tag mengikuti urutan opsi di DOM.
+            ApplyTagOrder(inputElement, tagValue);
+
+            // Tandai lewat atribut `selected`, BUKAN `value`: `value` baru diterima
+// setelah komponen upgrade, sedangkan atribut dibaca saat upgrade sehingga
+// tag langsung muncul tanpa retry/rAF/reload.
+            Array.from(inputElement.querySelectorAll('wa-option')).forEach(opt => {
+                if (tagValue.includes(opt.value)) opt.setAttribute('selected', '');
+                else opt.removeAttribute('selected');
+            });
+            // Sinkronkan juga properti komponen (aman, bukan sumber utama).
+            inputElement.value = tagValue;
+
+            // Tandai ada/tidaknya tag supaya CSS bisa menyusutkan form
+            // saat kosong (lihat :not([data-has-tags]) di style.css).
+            const syncHasTags = () => {
+                const n = Array.isArray(inputElement.value) ? inputElement.value.length : 0;
+                if (n) inputElement.setAttribute('data-has-tags', '');
+                else inputElement.removeAttribute('data-has-tags');
+            };
+            inputElement.addEventListener('input', syncHasTags);
+            inputElement.addEventListener('wa-change', syncHasTags);
+            setTimeout(syncHasTags, 0);
+
+            // wa-select baru menerima `value` setelah upgrade DAN terhubung ke DOM.
+// Menyetel sebelum terpasang membuat tag tersimpan hilang, jadi ulangi
+// beberapa tick (rAF terlalu cepat).
+            const wrap = document.createElement('div');
+            wrap.className = 'tags-row';
+            wrap.appendChild(inputElement);
+
+
+            inputElement._wrapWith = wrap;
+            break;
+        }
 
         case 'color':
             inputElement = document.createElement('wa-color-picker');
@@ -449,10 +1012,10 @@ function BuildInput(setting) {
 
         case 'button':
             inputElement = document.createElement('wa-button');
-            inputElement.textContent = setting.label;
+            inputElement.textContent = setting.buttonText || setting.label;
             inputElement.setAttribute('variant', 'brand');
             inputElement.addEventListener('click', () => {
-                widgetPreview.contentWindow[setting.callFunction]?.();
+                CallWidgetFunction(setting.callFunction);
             });
             return inputElement;
 
@@ -463,35 +1026,87 @@ function BuildInput(setting) {
 
     // Common: remember the setting id, persist + refresh on change
     inputElement.id = setting.id;
-    inputElement.addEventListener('input', () => {
+    // ── Strategi refresh: jangan reload iframe per ketikan. ──
+    // Nilai TETAP disimpan setiap event (localStorage) — yang ditunda hanya
+    // reload iframe-nya. Reload hanya diperlukan agar widget membaca ulang
+    // query param; menyimpan nilainya sendiri tidak butuh reload.
+    const typedType = REFRESH_DEBOUNCE_MS[setting.type] !== undefined;
+    // 'input' & 'wa-input' = SEDANG mengetik/menggeser.
+    // 'change' & 'wa-change' = user sudah selesai (blur / pilih / lepas drag).
+    // Import mengirim Event('input') synthetic → nilainya sudah final.
+    const pendingEvents = new Set(['input', 'wa-input']);
+
+    const handleInput = (event) => {
+        // Import mengirim event 'input' synthetic bertanda `committed`
+        // → nilainya sudah final, jangan dianggap sedang mengetik.
+        const isTyping = !event?.committed && pendingEvents.has(event?.type);
         let value;
         if (setting.type === 'checkbox')
             value = inputElement.checked;
-        else if (setting.type === 'number')
+        else if (setting.type === 'number' || setting.type === 'slider')
             value = Number(inputElement.value);
+        else if (setting.type === 'tags') {
+            // Ambil urutan dari tag yang tampil, lalu sinkronkan urutan
+            // <wa-option> supaya halaman berikutnya merender sama.
+            value = ReadTagOrder(inputElement) ||
+                (Array.isArray(inputElement.value) ? inputElement.value : []);
+            ApplyTagOrder(inputElement, value);
+        }
         else
             value = inputElement.value;
 
         // Custom override for Auto Test Dropdown: trigger instantly without reload
         if (setting.id === 'testAlertType') {
             if (value && value !== 'none') {
-                try {
-                    widgetPreview.contentWindow.testWidgetSelect(value);
-                    if (bc) bc.postMessage({ type: 'trigger_test', testType: value });
-                } catch (e) {
-                    console.error("Test trigger failed", e);
-                }
+                // Lewat CallWidgetFunction (bukan contentWindow mentah): mode dashboard
+// tidak punya iframe pratinjau, jadi contentWindow null -> throw -> baris
+// BroadcastChannel di bawahnya tidak pernah jalan dan OBS tak dapat test.
+                CallWidgetFunction('testWidgetSelect', [value]);
+                if (bc) bc.postMessage({ type: 'trigger_test', testType: value });
             }
             return; // Skip save & refresh
         }
 
+        // ── Validasi minimal 3 tag (Info Rotation) ──
+// Simpan nilainya, tapi jangan refresh pratinjau sebelum syarat terpenuhi.
+        if (setting.type === 'tags' && setting.minTags) {
+            const n = Array.isArray(value) ? value.length : 0;
+            const enough = n >= setting.minTags;
+            inputElement.parentElement?.classList.toggle('tags-invalid', n > 0 && !enough);
+            if (n > 0 && !enough) return; // jangan simpan & jangan refresh
+        }
+
         settingsMap.set(setting.id, value);
         SaveSettingsToStorage();
-        RefreshWidgetPreview();
         ApplyShowIfVisibility();
-    });
 
-    return inputElement;
+        // ── Pengecualian: Widget Scale (Zoom) ──
+// Nilai tetap disimpan, tapi diterapkan langsung lewat JS: widget sudah
+// punya window.setWidgetScale() dan listener 'set_scale'. Reload justru
+// mengulang animasi masuk dan mengganggu saat drag.
+        if (setting.id === 'widgetScale') {
+            try {
+                widgetPreview.contentWindow.setWidgetScale(value);
+                if (bc) bc.postMessage({ type: 'set_scale', scale: value });
+            } catch (e) {
+                console.error("Widget scale apply failed", e);
+            }
+            return; // Skip refresh
+        }
+
+        // Sedang mengetik & tipe rawan ketikan → tunda reload iframe.
+        // Selain itu (switch, select, blur, import) → refresh segera.
+        if (typedType && isTyping)
+            RefreshWidgetPreview(false, REFRESH_DEBOUNCE_MS[setting.type]);
+        else
+            RefreshWidgetPreview(false, true);
+    };
+    inputElement.addEventListener('input', handleInput);
+    inputElement.addEventListener('wa-input', handleInput);
+    inputElement.addEventListener('wa-change', handleInput);
+
+    // Tipe 'tags' dibungkus bersama tombol shuffle (lihat case 'tags').
+    return inputElement._wrapWith || inputElement;
 }
 
 function ApplyShowIfVisibility() {
@@ -537,12 +1152,88 @@ function LoadSettingsFromStorage() {
         const settingsMapArray = JSON.parse(settingsMapString);
         settingsMap = new Map(settingsMapArray);
     }
+
+    // Pulihkan pengaturan yang dilindungi dari Reset (koneksi OBS).
+    // Nilainya ditulis sesaat sebelum LoadDefaultSettings() membersihkan
+    // localStorage dan memuat ulang halaman.
+    try {
+        const raw = localStorage.getItem('geseki-preserve');
+        if (raw) {
+            const preserved = JSON.parse(raw);
+            Object.entries(preserved).forEach(([id, value]) => {
+                settingsMap.set(id, value);
+            });
+            localStorage.removeItem('geseki-preserve');
+            SaveSettingsToStorage();
+        }
+    } catch (e) { /* abaikan */ }
+}
+
+// ── Penyimpanan settings per scene ───────────────────────────────
+// Satu scene = satu profil settings, disimpan di localStorage
+// dengan kunci `geseki-scene-<nama scene>`. Jadi "Live" dan "BRB"
+// bisa punya tampilan widget berbeda.
+const SCENE_SETTINGS_PREFIX = 'geseki-scene-';
+
+function SceneStorageKey(sceneName) {
+    return SCENE_SETTINGS_PREFIX + sceneName;
+}
+
+function SaveSettingsForScene(sceneName) {
+    if (!sceneName) return;
+    try {
+        localStorage.setItem(SceneStorageKey(sceneName), JSON.stringify({
+            savedAt: Date.now(),
+            settings: Array.from(settingsMap.entries())
+        }));
+    } catch (e) { /* abaikan */ }
+}
+
+function ListSavedScenes() {
+    const out = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith(SCENE_SETTINGS_PREFIX)) continue;
+        let savedAt = 0;
+        try {
+            savedAt = JSON.parse(localStorage.getItem(key))?.savedAt || 0;
+        } catch (e) { /* abaikan */ }
+        out.push({ scene: key.slice(SCENE_SETTINGS_PREFIX.length), savedAt });
+    }
+    return out.sort((a, b) => b.savedAt - a.savedAt);
+}
+
+// Cara paling andal merender ulang semua kontrol adalah reload halaman —
+// nilai sudah tersimpan di localStorage oleh SaveSettingsToStorage().
+function ApplySettingsMapToForm() {
+    location.reload();
+}
+
+function LoadSettingsForScene(sceneName) {
+    const raw = localStorage.getItem(SceneStorageKey(sceneName));
+    if (!raw) throw new Error('Tidak ada settings tersimpan untuk scene ini');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.settings))
+        throw new Error('Berkas settings rusak');
+
+    settingsMap = new Map(parsed.settings);
+    SaveSettingsToStorage();
+    ApplySettingsMapToForm();
 }
 
 function LoadDefaultSettings() {
     localStorage.removeItem(`${keyPrefix}-settings`);
     settingsMap = new Map();
-    LoadJSON(settingsJson);
+    // Reload SETELAH render selesai. Dulu reload berbarengan dengan LoadJSON()
+// yang async, sehingga fetch terpotong dan form tag kosong sampai F5 manual.
+    try { sessionStorage.removeItem('geseki-reload-once'); } catch (e) {}
+    const done = LoadJSON(settingsJson);
+    const reload = () => location.reload();
+    if (done && typeof done.then === 'function') {
+        done.then(() => setTimeout(reload, 0)).catch(reload);
+    } else {
+        setTimeout(reload, 0);
+    }
 }
 
 
@@ -550,7 +1241,83 @@ function LoadDefaultSettings() {
 // URL BUILDER + PREVIEW //
 ///////////////////////////
 
-function BuildWidgetURL() {
+// ── Pembuat ikon header kartu ───────────────────────────────────────
+// Ikon judul section selama ini SELALU <i> berisi kelas Remix Icon.
+// Beberapa grup (mis. Streamer.bot) lebih tepat memakai logo resminya,
+// jadi ditambahkan dukungan berkas gambar. Keduanya tetap memakai
+// bingkai kaca yang sama lewat kelas `glass-icon` di style.css.
+
+// ── Layar loading layar-penuh (#loading) ──────────────────────────
+// Fade-out via kelas .hidden, lalu display:none setelah transisi
+// selesai. Kalau elemen #loading tidak ada, fungsi ini diam saja —
+// aman kalau markupnya kelak dihapus.
+
+// Kunci scroll halaman SELAMA loading berlangsung.
+// Mode dashboard tidak punya layar loading, jadi jangan pernah kunci.
+if (!isDashboardMode) document.body.style.overflow = 'hidden';
+
+function HideLoadingScreen() {
+    const loadingScreen = document.getElementById('loading');
+    if (!loadingScreen) {
+        document.body.style.overflow = '';
+        if (typeof window.__markSettingsReady === 'function') window.__markSettingsReady();
+        return;
+    }
+    if (loadingScreen.dataset.dismissed === 'true') return; // idempotent
+    loadingScreen.dataset.dismissed = 'true';
+
+    // Mode dashboard TIDAK memakai jeda minimum — begitu data siap,
+    // overlay langsung ditutup. Jeda itu hanya untuk mode settings
+    // supaya transisinya tidak terlalu cepat.
+    const elapsed = Date.now() - pageLoadStart;
+    const wait = isDashboardMode ? 0 : Math.max(0, MIN_LOADING_MS - elapsed);
+
+    setTimeout(() => {
+        loadingScreen.addEventListener('transitionend', function onEnd() {
+            loadingScreen.style.display = 'none';
+            // Lepaskan kunci scroll SETELAH layar loading tertutup penuh
+            document.body.style.overflow = '';
+            loadingScreen.removeEventListener('transitionend', onEnd);
+        });
+
+        loadingScreen.classList.add('hidden');
+
+        // Pengaman: kalau transitionend terlewat browser
+        setTimeout(() => { 
+            loadingScreen.style.display = 'none';
+            document.body.style.overflow = '';
+        }, 600);
+    }, wait);
+}
+
+function IsImageIcon(value) {
+    return typeof value === 'string' && /\.(svg|png|jpe?g|webp|avif)(\?.*)?$/i.test(value.trim());
+}
+
+function BuildFontIcon(className) {
+    const i = document.createElement('i');
+    i.className = className;
+    return i;
+}
+
+function BuildImageIcon(src, label) {
+    const img = document.createElement('img');
+    img.className = 'glass-icon';
+    img.src = src;
+    img.alt = (label || 'icon') + ' icon';
+    img.draggable = false;
+    // Kalau berkas gagal dimuat, ganti ke ikon cadangan (bukan kotak rusak).
+    img.addEventListener('error', () => {
+        img.replaceWith(BuildFontIcon('ri-settings-4-fill'));
+    }, { once: true });
+    return img;
+}
+
+function BuildWidgetURL(options = {}) {
+    // `previewOnly` hanya untuk URL pratinjau; `dragPreview` tidak pernah ikut
+// ke URL yang dipakai browser source OBS.
+    const previewOnly = options.previewOnly === true;
+
     const settings = {};
 
     settingsData.settings.forEach(setting => {
@@ -565,8 +1332,18 @@ function BuildWidgetURL() {
             settings[setting.id] = inputElement.value;
     });
 
+    // Penanda khusus PRATINJAU — bukan pengaturan widget. Ditambahkan di sini
+// (bukan settings.json) supaya tidak tampil sebagai opsi, tidak tersimpan,
+// dan tidak pernah ada di URL OBS.
+    if (previewOnly) settings.dragPreview = '1';
+
     const paramString = Object.entries(settings)
-        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .map(([key, value]) => {
+            // Nilai array (tipe 'tags' / multi-select) digabung jadi satu
+            // string berpemisah koma. Widget mem-parse-nya lagi saat startup.
+            const flat = Array.isArray(value) ? value.join(',') : value;
+            return `${encodeURIComponent(key)}=${encodeURIComponent(flat)}`;
+        })
         .join('&');
 
     let cleanWidgetURL = widgetURL || '../../dynamic-island-alert/';
@@ -586,9 +1363,102 @@ function BuildWidgetURL() {
     return cleanWidgetURL + (paramString ? "?" + paramString : "");
 }
 
-function RefreshWidgetPreview() {
-    const url = BuildWidgetURL();
-    widgetPreview.src = url;
+function RefreshWidgetPreview(immediate = false, waitMs = null) {
+    // Mode dashboard: tidak ada preview yang perlu dimuat ulang.
+    if (isDashboardMode) return;
+    const executeRefresh = () => {
+        // previewOnly → URL ini hanya untuk iframe pratinjau, jadi boleh
+        // menyertakan dragPreview.
+        const url = BuildWidgetURL({ previewOnly: true });
+
+        // If this is the initial load (activeIframe has no src yet), load directly
+        if (!activeIframe.src || activeIframe.src === 'about:blank') {
+            activeIframe.src = url;
+            return;
+        }
+
+        // Clean up any earlier pending iframe that didn't finish loading
+        if (pendingIframe) {
+            try { previewContainer.removeChild(pendingIframe); } catch (e) {}
+            pendingIframe = null;
+        }
+
+        // Iframe kedua dibuat tanpa id 'widgetPreview', jadi selector `#preview
+// iframe` tetap melingkupinya. Saat diswap id dipindah — geometri harus
+// identik agar tidak ada lompatan posisi.
+        const next = document.createElement('iframe');
+        next.style.opacity = '0';
+        next.style.pointerEvents = 'none';
+        next.style.visibility = 'hidden';
+        next.src = url;
+        pendingIframe = next;
+        previewContainer.appendChild(next);
+
+        let swapped = false;
+        const doSwap = () => {
+            if (swapped || pendingIframe !== next) return;
+            swapped = true;
+
+            const old = activeIframe;
+
+            // ── Swap ATOMIK: iframe lama & baru tidak boleh tampak bersamaan. ──
+// Keduanya position:fixed di titik sama dengan box-shadow 30px; kalau
+// overlap, bayangannya menumpuk lalu kembali normal ("denyut"). Maka
+// transisi dimatikan dan lama disembunyikan pada frame yang sama.
+            next.style.transition = 'none';
+            old.style.transition = 'none';
+
+            next.id = 'widgetPreview';
+            next.style.visibility = 'visible';
+            next.style.pointerEvents = 'auto';
+
+            activeIframe = next;
+            pendingIframe = null;
+
+            // Tunggu 2 frame: iframe baru sudah benar-benar menggambar
+            // isinya (rAF 1 = susun frame, rAF 2 = frame dipresentasikan).
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    // Lama disembunyikan & baru ditampilkan di FRAME YANG
+                    // SAMA → tidak pernah ada tumpang-tindih bayangan.
+                    try {
+                        old.style.visibility = 'hidden';
+                        old.style.opacity = '0';
+                    } catch (e) {}
+                    next.style.opacity = '1';
+
+                    // Lepas iframe lama setelah frame ini benar-benar tampil.
+                    requestAnimationFrame(() => {
+                        try {
+                            if (old && old.parentNode) old.parentNode.removeChild(old);
+                        } catch (e) {}
+                    });
+                });
+            });
+        };
+
+        next.addEventListener('load', doSwap, { once: true });
+
+        // Safety fallback timeout in case load event fails or stalls
+        setTimeout(() => {
+            if (!swapped && pendingIframe === next) doSwap();
+        }, 1200);
+    };
+
+    if (refreshDebounceTimer) clearTimeout(refreshDebounceTimer);
+
+    if (immediate) {
+        executeRefresh();
+        return;
+    }
+
+    // waitMs: angka = debounce khusus tipe input; true = frame berikutnya;
+// null = debounce bawaan 30ms.
+    const delay = typeof waitMs === 'number'
+        ? waitMs
+        : (waitMs === true ? 0 : DEFAULT_REFRESH_DEBOUNCE_MS);
+
+    refreshDebounceTimer = setTimeout(executeRefresh, delay);
 }
 
 
@@ -601,14 +1471,52 @@ function ImportSettings(urlString) {
         const url = new URL(urlString);
 
         url.searchParams.forEach((value, key) => {
-            const inputElement = document.getElementById(key);
+            // `let`, bukan `const`: cabang tags mengganti elemen select
+            // (rebuild) dan perlu menugaskan ulang. Dengan const itu
+            // melempar TypeError, ditangkap catch luar -> import berhenti
+            // di field ini dan sisa parameter URL tidak pernah diproses.
+            let inputElement = document.getElementById(key);
             if (inputElement != null) {
                 if (inputElement.tagName === 'WA-SWITCH')
                     inputElement.checked = value.toLocaleLowerCase() == 'true';
+                else if (inputElement.tagName === 'WA-SELECT' && inputElement.multiple) {
+                    // WA-SELECT multiple butuh ARRAY. String dibuang.
+                    const vals = String(value).split(',').map(v => v.trim()).filter(Boolean);
+                    const labels = {};
+                    Array.from(inputElement.querySelectorAll('wa-option')).forEach(o => {
+                        labels[o.value] = o.textContent;
+                    });
+                    const allVals = Object.keys(labels);
+                    const next = RebuildTagSelect(inputElement, allVals, labels, vals);
+                    if (next) {
+                        inputElement = next;
+                        // Import membangkitkan 'input' synthetic saat `value` masih [] (komponen
+// belum upgrade) dan sync() akan menghapus penanda — kunci dulu satu tick.
+                        let tagsLocked = true;
+                        const sync = () => {
+                            if (tagsLocked) return;
+                            const n = Array.isArray(next.value) ? next.value.length : 0;
+                            if (n) next.setAttribute('data-has-tags', '');
+                            else next.removeAttribute('data-has-tags');
+                        };
+                        setTimeout(() => { tagsLocked = false; }, 0);
+                        // Penanda CSS dipasang dari jumlah tag yang diminta, bukan dari `value`:
+// tepat setelah replaceWith `value` masih kosong, jadi sync() akan menghapus
+// penanda walau tag sudah tampil -> form menyusut.
+                        if (vals.length) next.setAttribute('data-has-tags', '');
+                        else next.removeAttribute('data-has-tags');
+                        next.addEventListener('input', evt => { sync(); handleInput(evt); });
+                        next.addEventListener('wa-change', evt => { sync(); handleInput(evt); });
+                    }
+                }
                 else
                     inputElement.value = value;
 
-                inputElement.dispatchEvent(new Event('input'));
+                // Event 'input' synthetic ditandai `committed` supaya tidak dianggap
+// "sedang mengetik" -> refresh langsung (ter-coalesce jadi satu reload).
+                const evt = new Event('input');
+                evt.committed = true;
+                inputElement.dispatchEvent(evt);
             }
         });
     }
@@ -723,12 +1631,15 @@ PopulateFontDatalist();
 LoadJSON(settingsJson);
 
 ///////////////////////////////////////
-// CHATRD-STYLE CONNECTION BADGES    //
+// BADGE STATUS KONEKSI    //
 ///////////////////////////////////////
 
 function InitConnectionBadges() {
     InitStreamerBotBadge();
     InitTikTokBadge();
+    InitSMTCBadge();
+    InitOBSBadge();
+    InitNowPlayingRelay();
 }
 
 function InitStreamerBotBadge() {
@@ -933,3 +1844,177 @@ function InitTikTokBadge() {
 }
 
 
+
+/* ============================================================================
+   RELAY NOW PLAYING
+   Halaman settings menjadi SATU-SATUNYA pengumpul data SMTC; widget (OBS/
+   TTLS/pratinjau) menerima hasilnya lewat BroadcastChannel
+   `geseki_island_channel`. Tiap instance yang fetch sendiri tiap 2s memicu
+   parse + filter + TriggerAlert di proses yang GPU-nya rebutan encoder.
+   Konsekuensi: halaman settings harus terbuka agar now playing jalan.
+   ============================================================================ */
+const NP_RELAY_INTERVAL = 1000;   // FetchNowPlaying = 1000ms sesuai permintaan
+const NP_RELAY_STALE = 4000;      // widget anggap relay mati setelah 4s tanpa pesan
+
+function InitNowPlayingRelay() {
+    if (!window.BroadcastChannel) return;
+
+    const relay = new BroadcastChannel('geseki_island_channel');
+
+    // Widget memberi tahu relay bahwa ia hidup, supaya relay langsung kirim
+    // snapshot terakhir (tanpa menunggu 1s berikutnya).
+    relay.onmessage = function (event) {
+        if (event.data && event.data.type === 'np_hello' && lastNowPlayingPayload) {
+            relay.postMessage({ type: 'now_playing', payload: lastNowPlayingPayload });
+        }
+    };
+
+    let lastNowPlayingPayload = null;
+
+    async function pollOnce() {
+        // Hanya relay bila Now Playing diaktifkan di settings.
+        let enabled = true;
+        const enableInput = document.getElementById('enableNowPlaying');
+        if (enableInput) enabled = enableInput.checked;
+        else if (settingsMap.has('enableNowPlaying')) enabled = Boolean(settingsMap.get('enableNowPlaying'));
+
+        if (!enabled) {
+            lastNowPlayingPayload = { enabled: false, ok: false, sessions: [], current_session_id: null };
+            relay.postMessage({ type: 'now_playing', payload: lastNowPlayingPayload });
+            return;
+        }
+
+        const portInput = document.getElementById('smtcBridgePort');
+        const port = portInput?.value || settingsMap.get('smtcBridgePort') || 5000;
+        const url = `http://127.0.0.1:${port}/now-playing`;
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('bridge offline');
+            const data = await response.json();
+            lastNowPlayingPayload = {
+                enabled: true,
+                ok: true,
+                sessions: data.sessions || [],
+                current_session_id: data.current_session_id || null
+            };
+        } catch (e) {
+            lastNowPlayingPayload = { enabled: true, ok: false, sessions: [], current_session_id: null };
+        }
+
+        relay.postMessage({ type: 'now_playing', payload: lastNowPlayingPayload });
+    }
+
+    pollOnce();
+    setInterval(pollOnce, NP_RELAY_INTERVAL);
+}
+
+function InitSMTCBadge() {
+    const status = document.getElementById('status-smtc');
+    if (!status) return;
+
+    let checkInterval = null;
+
+    function isSMTCEnabled() {
+        const enableInput = document.getElementById('enableNowPlaying');
+        if (enableInput) return enableInput.checked;
+        if (settingsMap.has('enableNowPlaying')) return Boolean(settingsMap.get('enableNowPlaying'));
+        return true;
+    }
+
+    async function checkSMTC() {
+        if (!isSMTCEnabled()) {
+            status.classList.remove('connected');
+            return;
+        }
+
+        const portInput = document.getElementById('smtcBridgePort');
+        const port = portInput?.value || settingsMap.get('smtcBridgePort') || 5000;
+        const url = `http://127.0.0.1:${port}/now-playing`;
+
+        try {
+            const response = await fetch(url);
+            if (response.ok) {
+                status.classList.add('connected');
+            } else {
+                status.classList.remove('connected');
+            }
+        } catch (e) {
+            status.classList.remove('connected');
+        }
+    }
+
+    checkSMTC();
+    checkInterval = setInterval(checkSMTC, 10000);
+
+    const enableInput = document.getElementById('enableNowPlaying');
+    if (enableInput) {
+        enableInput.addEventListener('wa-change', checkSMTC);
+        enableInput.addEventListener('change', checkSMTC);
+    }
+    const portInput = document.getElementById('smtcBridgePort');
+    if (portInput) portInput.addEventListener('input', checkSMTC);
+}
+
+// ── Badge status koneksi OBS ──────────────────────────────────────
+// Pola sama dengan InitSMTCBadge. obs-websocket memakai WebSocket, jadi
+// status diuji dengan membuka koneksi sebentar lalu langsung menutupnya —
+// kalau dibiarkan terbuka, tiap pengecekan menambah koneksi ke OBS.
+function InitOBSBadge() {
+    const status = document.getElementById('status-obs');
+    if (!status) return;
+
+    let probe = null;
+
+    function setConnected(ok) {
+        status.classList.toggle('connected', ok === true);
+    }
+
+    function checkOBS() {
+        const cfg = (typeof GetObsConfig === 'function')
+            ? GetObsConfig()
+            : { address: '127.0.0.1', port: 4455, password: '' };
+
+        // Tutup probe sebelumnya yang belum sempat selesai.
+        if (probe) {
+            try { probe.onopen = probe.onerror = probe.onclose = null; probe.close(); } catch (e) {}
+            probe = null;
+        }
+
+        try {
+            probe = new WebSocket(`ws://${cfg.address}:${cfg.port}`);
+        } catch (e) {
+            setConnected(false);
+            return;
+        }
+
+        // Pengaman: kalau OBS menerima koneksi tapi tidak pernah
+        // mengirim Hello, anggap gagal.
+        const timer = setTimeout(() => {
+            setConnected(false);
+            try { probe?.close(); } catch (e) {}
+        }, 3000);
+
+        probe.onopen = () => {
+            // Terhubung di level TCP — artinya server obs-websocket
+            // hidup. Tidak perlu autentikasi untuk sekadar cek status.
+            clearTimeout(timer);
+            setConnected(true);
+            try { probe.close(); } catch (e) {}
+        };
+        probe.onerror = () => {
+            clearTimeout(timer);
+            setConnected(false);
+        };
+        probe.onclose = () => { clearTimeout(timer); };
+    }
+
+    checkOBS();
+    setInterval(checkOBS, 10000);
+
+    // Perubahan IP/port/password langsung memicu pengecekan ulang.
+    ['obsAddress', 'obsPort', 'obsPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', checkOBS);
+    });
+}

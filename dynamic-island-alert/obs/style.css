@@ -1,5 +1,5 @@
 :root {
-	/* Chrome/OBS: animasikan perubahan lebar max-content dengan mulus */
+	/* Izinkan Chrome modern menginterpolasi lebar max-content. */
 	interpolate-size: allow-keywords;
 }
 
@@ -23,11 +23,12 @@ body {
 	--glass-reflex-dark: 2;
 	--glass-reflex-light: 0.3;
 	--saturation: 150%;
-
+	
 	position: fixed;
 	top: 12px;
 	left: 50%;
-	/* Default wajib ada: tanpa ini pill muncul geser kanan di frame pertama, karena script.js baru set --base-transform setelah paint pertama. */
+	/* WAJIB ada default: kalau tidak, transform hanya di-set script.js
+   setelah paint pertama dan pill terlihat bergeser dari kanan. */
 	transform: var(--base-transform, translateX(-50%));
 	/* Liquid Glass */
 	background-color: color-mix(in srgb, var(--c-glass) 25%, transparent);
@@ -36,16 +37,16 @@ body {
 	border: none;
 	color: #fff;
 	padding: var(--island-padding-y, 14px) var(--island-padding-x, 20px);
-	border-radius: 60px; /* Absolut: tetap pill saat kecil, rounded corner saat music big membesar */
+	border-radius: 60px; /* Gunakan 60px absolut: tetap berbentuk pill di mode kecil, dan rounded corner saat Music Big membesar */
 	min-height: 50px;
 	font-size: 16px;
 	display: inline-flex;
 	align-items: center;
-	justify-content: flex-start;
+	justify-content: center;
 	width: max-content;
 	max-width: 90vw;
-	/* Bevel 3D */
-	box-shadow:
+	/* 3D Bevel Box Shadow */
+	box-shadow: 
 		inset 0 0 0 1px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 10%), transparent),
 		inset 1.8px 3px 0px -2px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 90%), transparent),
 		inset -2px -2px 0px -2px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 80%), transparent),
@@ -60,9 +61,9 @@ body {
 	transform-origin: top center;
 }
 
-/* Widget lebih tinggi untuk event/alert TikTok */
+/* Expanded taller widget for TikTok events / alerts */
 #dynamicIsland.alert-active {
-	/* Background sengaja tidak di-set: mewarisi base pill */
+	/* Background sengaja dihilangkan: warisi glass transparan dari base pill. */
 	padding: var(--island-alert-padding-y, 12px) var(--island-alert-padding-x, 24px);
 	min-height: 58px;
 	min-height: 50px;
@@ -71,8 +72,8 @@ body {
 
 #dynamicIsland:not(.style-solid).alert-active {
 	border: none;
-	/* Shadow lebih dalam saat alert; tekstur bevel tetap dipertahankan */
-	box-shadow:
+	/* Proporsi 3D sedikit ditingkatkan saat alert. */
+	box-shadow: 
 		inset 0 0 0 1px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 10%), transparent),
 		inset 1.8px 3px 0px -2px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 90%), transparent),
 		inset -2px -2px 0px -2px color-mix(in srgb, var(--c-light) calc(var(--glass-reflex-light) * 80%), transparent),
@@ -82,14 +83,14 @@ body {
 		0px 8px 24px 0px color-mix(in srgb, var(--c-dark) calc(var(--glass-reflex-dark) * 35%), transparent);
 }
 
-/* Override gaya: hitam pekat solid */
+/* Override: Solid Black */
 #dynamicIsland.style-solid {
 	background: #000;
 	backdrop-filter: none;
 	-webkit-backdrop-filter: none;
 	border: none;
-	/* Bevel neumorphic untuk hitam solid */
-	box-shadow:
+	/* Bevel neumorphic untuk Solid Black */
+	box-shadow: 
 		8px 8px 18px rgba(0, 0, 0, 0.8),
 		-4px -4px 12px rgba(255, 255, 255, 0.03),
 		inset 1.5px 1.5px 4px rgba(255, 255, 255, 0.15),
@@ -99,26 +100,24 @@ body {
 #dynamicIsland.style-solid.alert-active {
 	background: #080808;
 	border: none;
-	box-shadow:
+	box-shadow: 
 		10px 10px 24px rgba(0, 0, 0, 0.9),
 		-4px -4px 14px rgba(255, 255, 255, 0.05),
 		inset 2px 2px 5px rgba(255, 255, 255, 0.2),
 		inset -2px -2px 5px rgba(0, 0, 0, 0.9);
 }
 
-/* Foto profil TikTok */
+/* TikTok profile picture */
 #islandAvatar {
 	width: var(--island-avatar-size, 38px);
 	height: var(--island-avatar-size, 38px);
 	border-radius: 50%;
 	object-fit: cover;
 	flex-shrink: 0;
-	/* Transparan saat load: cegah lingkaran hitam muncul sebelum gambar selesai dimuat */
-	background: transparent;
-	color: transparent; /* Sembunyikan alt text saat gambar gagal dimuat */
-	/* Bevel lingkaran */
+	background: #1e1e1e;
+	/* Neumorphic circle */
 	border: none;
-	box-shadow:
+	box-shadow: 
 		4px 4px 10px rgba(0, 0, 0, 0.5),
 		-2px -2px 8px rgba(255, 255, 255, 0.05),
 		inset 1.5px 1.5px 3px rgba(255, 255, 255, 0.25),
@@ -130,13 +129,9 @@ body {
 	height: var(--island-icon-ambient, 20px);
 	object-fit: contain;
 	flex-shrink: 0;
-	/* Transisi ukuran wajib ada: tanpa ini ikon loncat ke 60px lebih dulu dari pill dan menyeret teks judul/artis */
-	transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-	            height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-	            border-radius 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Kontainer konten */
+/* Content container */
 #islandContent {
 	display: inline-flex;
 	flex-direction: column;
@@ -167,7 +162,7 @@ body {
 	margin-top: 1px;
 }
 
-/* Ikon event di sisi kanan saat alert */
+/* Event icon on the right side during alert */
 #islandEventIcon {
 	width: var(--island-icon-alert, 24px);
 	height: var(--island-icon-alert, 24px);
@@ -177,18 +172,18 @@ body {
 	filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
 }
 
-/* Mode ambient: wave icon 20px, sama dengan ikon info lain, agar tinggi pill now playing identik */
+/* Ambient: wave icon 20px = ikon info lain, agar tinggi pill identik. */
 #dynamicIsland:not(.alert-active) #islandEventIcon {
 	width: var(--island-icon-ambient, 20px);
 	height: var(--island-icon-ambient, 20px);
 }
 
-/* Kontainer legacy: disembunyikan agar tidak menyisakan layout hantu */
+/* Alert element (legacy container kept hidden to prevent ghost layout) */
 #islandAlert {
 	display: none !important;
 }
 
-/* Fade-in halus untuk pergantian teks info, menggantikan efek mantul/bergetar */
+/* Smooth fade in for info text changes, replacing bouncy/shaky effect */
 @keyframes bounceIn {
 	0%   { opacity: 0; }
 	100% { opacity: 1; }
@@ -197,7 +192,8 @@ body {
 .bounce-in {
 	}
 
-/* Bounce pill: diskalakan dari top center (transform-origin) — tepi atas diam, overshoot ke bawah */
+/* Skala dari titik tengah-atas: pill tumbuh ke bawah seperti Dynamic Island.
+   translateY positif = overshoot ke bawah. */
 @keyframes islandAmbientBounce {
 	0%   { transform: var(--base-transform, translateX(-50%)) translateY(0) scale(0.97); }
 	50%  { transform: var(--base-transform, translateX(-50%)) translateY(2px) scale(1.015); }
@@ -218,12 +214,10 @@ body {
 	animation: islandAlertPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* Music big: bounce pill tetap jalan, #islandInner diberi counter-scale supaya isi tidak ikut membesar */
-
 .alert-content-pop {
 	}
 
-/* Gift shake: rotasi kiri-kanan pada ikon/avatar selama alert gift tayang */
+/* Gift shake: rotasi kiri-kanan pada ikon/avatar. */
 @keyframes shakeShake {
 	0%   { transform: rotate(0deg) scale(1); }
 	10%  { transform: rotate(-14deg) scale(1.12); }
@@ -240,7 +234,7 @@ body {
 	transform-origin: center;
 }
 
-/* Album art mode ambient: 20px, sama dengan ikon info lain, agar tinggi pill seragam */
+/* Album art ambient 20px = ikon info lain, agar tinggi pill identik. */
 .rounded-icon {
 	width: var(--island-icon-ambient, 20px) !important;
 	height: var(--island-icon-ambient, 20px) !important;
@@ -248,24 +242,16 @@ body {
 	object-fit: cover !important;
 }
 
-/* Fade-in konten ambient: hanya opacity, tidak ada pergeseran layout */
-@keyframes topRowFadeIn {
-	0%   { opacity: 0; }
-	100% { opacity: 1; }
-}
-
-.ambient-fade-in {
-	animation: topRowFadeIn 0.15s ease-out both;
-}
-
-/* Marquee / teks berjalan untuk judul panjang (Now Playing) */
+/* Marquee / Scrolling effect for long text (Now Playing) */
 .marquee-container {
-	/* Lebar = kapasitas panel date; diset JS lewat --marquee-width (fallback 130px) */
+	/* Lebar = kapasitas panel date, disamakan lewat JS (--marquee-width). */
 	width: var(--marquee-width, 130px);
 	overflow: hidden;
 	display: inline-block;
 	vertical-align: bottom;
-	/* [NON-LATIN] overflow:hidden memotong glyph Thai/Devanagari/aksen tinggi: padding + margin negatif melebarkan kotak klip tanpa mengubah layout */
+	/* [NON-LATIN] overflow:hidden memotong glyph di luar line box. Ruang
+   vertikal ekstra + margin negatif melebarkan kotak klip tanpa
+   mengubah layout. */
 	padding-block: 0.35em;
 	margin-block: -0.35em;
 }
@@ -278,13 +264,13 @@ body {
 	animation: scrollLeftOnce var(--marquee-duration, 6s) ease-in-out forwards;
 }
 
-/* Sekali jalan: jeda di awal, geser kiri sejauh --marquee-shift (negatif, dihitung JS), jeda di akhir */
+/* Jeda di awal, geser kiri sejauh overflow nyata (--marquee-shift), jeda di akhir. */
 @keyframes scrollLeftOnce {
 	0%, 15%   { transform: translateX(0); }
 	85%, 100% { transform: translateX(var(--marquee-shift, -100px)); }
 }
 
-/* --- MUSIC BIG EXTRA (Spotify Style) --- */
+/* --- MUSIC BIG EXTRA (Spotify style) --- */
 #dynamicIsland {
 	flex-direction: column;
 }
@@ -298,64 +284,16 @@ body {
 	width: 380px;
 	height: 200px;
 	padding: 24px 30px;
-	/* border-radius tidak perlu di-set: base sudah 60px universal */
+	/* Radius 60px universal dari base, tidak perlu di-set ulang. */
 	gap: 20px;
 	box-sizing: border-box;
-	/* Konten di-anchor ke ATAS: align-items:center bikin isi meluncur turun saat tinggi pill mekar 63 -> 200 */
-	align-items: flex-start;
-	/* Easing tanpa overshoot: base punya overshoot proporsional delta ukuran, sehingga judul pendek terlihat goyah */
-	/* padding dikeluarkan dari transition: padding melompat di frame pertama, posisi vertikal konten diam total */
-	transition-property: width, height, background-color, border-radius, box-shadow, gap;
-}
-
-/* #islandInner membungkus isi pill dan diberi counter-scale saat bounce agar judul & artis diam */
-#islandInner {
-	transform-origin: top center;
-	/* gap 20px dipulihkan di sini: sebelum ada wrapper, anak langsung pill yang punya gap itu */
-	display: flex;
-	flex-direction: column;
-	gap: 20px;
-}
-/* Origin counter-scale harus sama dengan origin pill: 50% -32px = titik top center pill dalam ruang inner, jadi scale(s)/scale(1/s) presisi */
-#dynamicIsland.alert-music-big #islandInner {
-	/* 32px = padding atas music big (24) + margin-top (8) */
-	transform-origin: 50% -32px;
-	/* margin-top 8px menyeimbangkan ruang atas/bawah: isi 135px di pill 200px -> offset ideal 32.5px */
-	margin-top: 8px;
-}
-#dynamicIsland.alert-music-big.ambient-bounce #islandInner {
-	animation: islandInnerCounterAmbient 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-}
-#dynamicIsland.alert-music-big.alert-pop #islandInner {
-	animation: islandInnerCounterPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-@keyframes islandInnerCounterAmbient {
-	0%   { transform: translateY(0) scale(1.0309); }
-	50%  { transform: translateY(-2px) scale(0.9852); }
-	100% { transform: translateY(0) scale(1); }
-}
-@keyframes islandInnerCounterPop {
-	0%   { transform: translateY(0) scale(1.1111); }
-	50%  { transform: translateY(-4px) scale(0.9615); }
-	100% { transform: translateY(0) scale(1); }
-}
-
-/* Dipasang sementara script.js saat pill keluar dari music big: easing tanpa overshoot, simetris dengan saat mekar */
-#dynamicIsland.morph-no-overshoot {
-	transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 
 #dynamicIsland.alert-music-big #islandIcon {
-	/* Slot album art dikunci 60px dari frame pertama (flex-basis tidak ikut transition) agar teks tidak terseret saat pill mekar */
-	flex: 0 0 60px;
-	min-width: 60px;
-	max-width: 60px;
 	width: 60px !important;
 	height: 60px !important;
 	border-radius: 16px !important;
-	/* transition: none — tinggi gambar yang merayap 58.7 -> 60 terbaca sebagai goyah; bounce sudah dikompensasi #islandInner */
-	transition: none !important;
 }
 #dynamicIsland.alert-music-big #islandText {
 	font-size: 20px;
@@ -385,7 +323,7 @@ body {
 	color: #888;
 	font-weight: 600;
 }
-/* Progress bar: trek tipis + isi warna aksen, tanpa wave dance */
+/* Progress bar polos: trek tipis + isi warna aksen, tanpa wave dance. */
 #musicBigExtra .scrub-bar {
 	flex-grow: 1;
 	height: 4px;
@@ -395,14 +333,15 @@ body {
 	position: relative;
 }
 #musicBigExtra .scrub-bar::before {
-	content: none; /* Trek sudah jadi background .scrub-bar */
+	content: none; /* trek sudah jadi background .scrub-bar */
 }
 #musicBigExtra .scrub-fill {
 	height: 100%;
-	width: 0%; /* Diatur JS */
+	width: 0%; /* JS yang mengatur */
 	border-radius: 1em;
 	background-color: var(--accent-color, #ffffff);
-	/* Hanya warna yang ditransisi: transisi width bikin bar tertinggal ~1s dari update rAF @250ms */
+	/* Lebar di-update via rAF (250ms) — transisi width malah bikin bar
+   tertinggal. Yang ditransisi hanya warna saat ganti lagu. */
 	transition: background-color 0.5s ease-in-out;
 	background-image: none;
 	position: absolute;
@@ -437,40 +376,34 @@ body {
 }
 
 
-/* Penyesuaian baris atas gaya Spotify */
+/* Tweaks for Spotify Style Top Row */
 #dynamicIsland.alert-music-big #islandTopRow {
     gap: 16px;
-    /* Tinggi baris dikunci 60px: tanpa ini topRow ikut mekar 46 -> 60 dan judul/artis meluncur turun ~8px */
-    height: 60px;
-    min-height: 60px;
-    max-height: 60px;
-    align-items: center;
 }
-/* --marquee-width music big: 196px ruang teks dikurangi padding 12px ke wave icon; JS dan .marquee-container membaca angka yang sama */
+/* Batas marquee khusus music big. */
 #dynamicIsland.alert-music-big {
     --marquee-width: 184px;
 }
 #dynamicIsland.alert-music-big #islandContent {
-    flex: 1; /* Stretch untuk mendorong wave ke kanan */
-    align-items: flex-start; /* Teks rata kiri */
-    min-width: 0; /* Izinkan teks menyusut, jangan dorong wave icon keluar */
+    flex: 1; /* Stretch to push wave to the right */
+    align-items: flex-start; /* Left align text */
+    min-width: 0; /* Izinkan teks menyusut, tidak mendorong wave icon keluar */
     overflow: hidden;
-    /* Jarak judul -> wave icon pakai PADDING, bukan lebar tetap */
-    padding-right: 12px;
+    padding-right: 12px; /* jarak judul -> wave icon */
 }
-/* Lebar tetap 184px wajib: tanpa itu kotak teks mengecil sesuai teks dan jarak ke wave icon berantakan. text-overflow sengaja dihapus — yang meng-klip adalah .marquee-container */
+/* Lebar tetap 184px, tanpa ellipsis. */
 #dynamicIsland.alert-music-big #islandText {
     width: 184px;
     max-width: 184px;
-    white-space: nowrap; /* 1 baris, tidak wrap */
-    overflow: hidden; /* Tanpa text-overflow -> klip, bukan "..." */
+    white-space: nowrap;
+    overflow: hidden;
 }
 #dynamicIsland.alert-music-big #islandSubtext {
     width: 184px;
     max-width: 184px;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis; /* Artis cenderung pendek, ellipsis aman */
+    text-overflow: ellipsis;
 }
 #dynamicIsland.alert-music-big #islandEventIcon {
     width: 32px !important;
@@ -481,13 +414,14 @@ body {
 
 
 
-/* Tidak ada panel yang bisa tayang -> pill disembunyikan, bukan tampilkan teks fallback */
+/* Tidak ada panel yang bisa tayang -> pill disembunyikan. */
 #dynamicIsland.island-no-panel {
     opacity: 0;
     pointer-events: none;
 }
 
-/* Panel musik saat PAUSE: overlay menutupi album art, teks jadi label "Paused • m:ss", wave icon tetap di kanan */
+/* Panel musik saat PAUSE: overlay menutupi album art, teks jadi
+   "Paused • m:ss", wave icon tetap di kanan. */
 #islandIconWrap {
 	position: relative;
 	display: inline-flex;
@@ -496,7 +430,8 @@ body {
 	height: var(--island-icon-ambient, 20px);
 }
 
-/* Wrapper ikut hilang saat ikon disembunyikan (event TikTok pakai avatar): cegah slot 20px dobel */
+/* Saat ikon disembunyikan (event TikTok pakai avatar), wrapper ikut hilang
+   agar slot 20px tidak dobel. */
 #islandIconWrap:has(> #islandIcon.hidden) {
 	display: none;
 }
@@ -514,7 +449,7 @@ body {
 #islandPauseOverlay svg {
 	width: 60%;
 	height: 60%;
-	/* Warna aksen lagu (lightVibrant), fallback putih */
+	/* Warna aksen lagu (lightVibrant), fallback putih. */
 	fill: var(--accent-color, #ffffff);
 	filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
 }
@@ -526,7 +461,8 @@ body {
 	overflow: hidden;
 }
 
-/* Song change (music big): wrapper album art ikut 60px — jika tetap 20px, <img> 60px meluber dan menimpa judul/artis */
+/* Song change: wrapper mengikuti ukuran 60px, kalau tidak gambar
+   meluber keluar slot dan menimpa teks. */
 #dynamicIsland.alert-music-big #islandIconWrap {
 	flex: 0 0 60px;
 	min-width: 60px;

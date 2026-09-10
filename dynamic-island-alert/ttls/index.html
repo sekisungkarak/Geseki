@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 	<meta charset="UTF-8">
-	<link rel="shortcut icon" href="../resources/logo/sekisungkarak_logo.png" type="image/jpeg" />
+	<link rel="shortcut icon" href="../../resources/logo/sekisungkarak_logo.png" type="image/jpeg" />
 	<script src="https://unpkg.com/@streamerbot/client/dist/streamerbot-client.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/dayjs@1/locale/id.js"></script>
@@ -12,7 +12,7 @@
 	     Catatan: script.js dimuat oleh router di AKHIR body (lihat bawah),
 	     bukan di sini. Script widget perlu elemen pill sudah ada di DOM.
 	     ============================================================ -->
-	<link rel="stylesheet" href="./style.css?v=77" />
+	<link rel="stylesheet" href="./style.css?v=82" />
 </head>
 
 <body>
@@ -64,41 +64,6 @@
 		<span id="alertText"></span>
 	</div>
 </body>
-
-<!-- ============================================================
-     ROUTER: Chrome vs OBS
-     OBS 32.2.2 memakai CEF Chromium 127, yang BELUM mendukung
-     `interpolate-size: allow-keywords` (Chromium 129+). Perbaikan
-     terbaru (wrap #islandInner, counter-scale, lebar teks dikunci)
-     mengandalkan engine modern dan tidak stabil di Chromium 127.
-     Karena itu OBS diarahkan ke ./obs/index.html — satu paket utuh
-     (HTML + CSS + JS versi stabil) tanpa campur tangan dari sini.
-     Halaman utama ini hanya dipakai Chrome.
-     Paksa manual: ?engine=chrome tetap di sini, ?engine=obs lompat.
-     PENTING: router ada di sini (setelah body) karena script widget
-     butuh elemen pill sudah ada di DOM — kalau di head, script jalan
-     sebelum body dan getElementById mengembalikan null.
-     ============================================================ -->
-<script>
-(function () {
-	var q = new URLSearchParams(location.search).get('engine');
-	var ua = navigator.userAgent;
-	var isObs  = /OBS/i.test(ua) || typeof window.obsstudio !== 'undefined';
-	var isTtls = /TikTok/i.test(ua) || /TTLS/i.test(ua) || /TTElectron/i.test(ua);
-
-	if (q === 'ttls' || isTtls) {
-		location.replace('./ttls/index.html' + location.search);
-		return;
-	}
-	if (q === 'obs' || isObs) {
-		location.replace('./obs/index.html' + location.search);
-		return;
-	}
-	var v = '140';
-	document.write(
-		'<' + 'script src="./script.js?v=' + v + '"><\/script>'
-	);
-	window.__gesekiEngine = 'chrome';
-})();
-</script>
+<!-- Cabang TikTok Live Studio (TTLS): kode terbaru, tanpa router -->
+<script src="./script.js?v=140"></script>
 </html>

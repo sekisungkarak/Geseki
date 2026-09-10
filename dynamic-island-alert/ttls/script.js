@@ -104,7 +104,7 @@ const SMTC_BRIDGE_PORT = GetIntParam("smtcBridgePort", 5000);
 const SMTC_BRIDGE_URL = `http://127.0.0.1:${SMTC_BRIDGE_PORT}/now-playing`;
 
 // Inisialisasi Audio Notifikasi
-const alertAudio = new Audio("../resources/sfx/notification.mp3");
+const alertAudio = new Audio("../../resources/sfx/notification.mp3");
 // Turunkan volume karena aslinya sfx ini cukup keras (sesuaikan kalau kurang)
 alertAudio.volume = 0.5;
 
@@ -2200,7 +2200,7 @@ function ProcessAlertQueue() {
 
 // Global test helpers for preview / dev
 const testUser = 'sekisungkarak';
-const testAvatar = '../resources/sekisungkarak_avatar.jpeg';
+const testAvatar = '../../resources/sekisungkarak_avatar.jpeg';
 
 window.testFollow = function () {
 	const msg = urlParams.get("followMessage") || "followed!";
@@ -2318,8 +2318,9 @@ if (window.BroadcastChannel) {
 		} else if (event.data.type === 'set_scale') {
 			window.setWidgetScale(event.data.scale);
 		} else if (event.data.type === 'callFunction') {
-			// Perintah dari settings page (mis. tombol Reset First Chatter), lewat BroadcastChannel
-			// supaya menjangkau instance OBS di luar settings page.
+			// Perintah dari settings page (mis. tombol Reset First Chatter).
+			// Lewat BroadcastChannel supaya menjangkau instance OBS yang
+			// berjalan di luar settings page — bukan cuma preview.
 			const fn = window[event.data.fn];
 			if (typeof fn === 'function') {
 				try {
