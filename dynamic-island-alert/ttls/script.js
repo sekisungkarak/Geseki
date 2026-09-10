@@ -104,7 +104,7 @@ const SMTC_BRIDGE_PORT = GetIntParam("smtcBridgePort", 5000);
 const SMTC_BRIDGE_URL = `http://127.0.0.1:${SMTC_BRIDGE_PORT}/now-playing`;
 
 // Inisialisasi Audio Notifikasi
-const alertAudio = new Audio("../../resources/sfx/notification.mp3");
+const alertAudio = new Audio("../resources/sfx/notification.mp3");
 // Turunkan volume karena aslinya sfx ini cukup keras (sesuaikan kalau kurang)
 alertAudio.volume = 0.5;
 
@@ -1588,8 +1588,13 @@ function ConnectLiveStudio(portIndex) {
 
 	const ports = liveStudioPort > 0 ? [liveStudioPort] : LIVE_STUDIO_PORTS;
 	if (portIndex >= ports.length) {
-		// Tidak ada port yang menerima; coba lagi nanti (LIVE Studio mungkin belum siap).
-		ScheduleLiveRetry(portIndex);
+		// Semua port gagal -> ulangi dari port PERTAMA.
+		// Dulu meneruskan `portIndex` (sudah di luar rentang), sehingga
+		// ScheduleLiveRetry memanggil ConnectLiveStudio(7) yang langsung
+		// kembali ke sini: terjebak selamanya tanpa pernah memindai port
+		// 0-6 lagi. Akibatnya deteksi baru jalan setelah halaman
+		// di-refresh — itu satu-satunya saat pemindaian penuh terjadi.
+		ScheduleLiveRetry(0);
 		return;
 	}
 
@@ -1774,6 +1779,11 @@ function WithTimeout(promise, ms) {
 // yang tampil. Menambah `skip` per panel BUKAN solusi: itu menyembunyikan panel,
 // bukan mengisi datanya tepat waktu.
 async function InitInfoLoop() {
+	// Deteksi live dijalankan SEBELUM menunggu data panel. Dulu ia
+	// dipanggil setelah `await` 2,5 detik, jadi deteksi baru mulai
+	// beberapa detik setelah widget tayang.
+	LoadSocketIoAndDetect();
+
 	// Isi dulu, tanpa menggambar apa pun.
 	await WithTimeout(Promise.all([FetchWeather(), FetchNowPlaying()]), 2500);
 
@@ -2200,7 +2210,7 @@ function ProcessAlertQueue() {
 
 // Global test helpers for preview / dev
 const testUser = 'sekisungkarak';
-const testAvatar = '../../resources/sekisungkarak_avatar.jpeg';
+const testAvatar = '../resources/sekisungkarak_avatar.jpeg';
 
 window.testFollow = function () {
 	const msg = urlParams.get("followMessage") || "followed!";
@@ -2318,9 +2328,8 @@ if (window.BroadcastChannel) {
 		} else if (event.data.type === 'set_scale') {
 			window.setWidgetScale(event.data.scale);
 		} else if (event.data.type === 'callFunction') {
-			// Perintah dari settings page (mis. tombol Reset First Chatter).
-			// Lewat BroadcastChannel supaya menjangkau instance OBS yang
-			// berjalan di luar settings page — bukan cuma preview.
+			// Perintah dari settings page (mis. tombol Reset First Chatter), lewat BroadcastChannel
+			// supaya menjangkau instance OBS di luar settings page.
 			const fn = window[event.data.fn];
 			if (typeof fn === 'function') {
 				try {

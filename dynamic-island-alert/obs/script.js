@@ -1424,8 +1424,13 @@ function ConnectLiveStudio(portIndex) {
 
 	const ports = liveStudioPort > 0 ? [liveStudioPort] : LIVE_STUDIO_PORTS;
 	if (portIndex >= ports.length) {
-		// Tidak ada port yang menerima; coba lagi nanti (LIVE Studio mungkin belum siap).
-		ScheduleLiveRetry(portIndex);
+		// Semua port gagal -> ulangi dari port PERTAMA.
+		// Dulu meneruskan `portIndex` (sudah di luar rentang), sehingga
+		// ScheduleLiveRetry memanggil ConnectLiveStudio(7) yang langsung
+		// kembali ke sini: terjebak selamanya tanpa pernah memindai port
+		// 0-6 lagi. Akibatnya deteksi baru jalan setelah halaman
+		// di-refresh — itu satu-satunya saat pemindaian penuh terjadi.
+		ScheduleLiveRetry(0);
 		return;
 	}
 
