@@ -126,7 +126,7 @@ body::before {
 html {
     scroll-behavior: smooth;
     overflow-wrap: break-word;
-    background-color: transparent;
+    background-color: #000;
     /* `width: 100vw` DIHAPUS: memaksa lebar statis, membuat scrollbar
        overlay muncul ke dalam dan menutupi konten. */
 }
@@ -134,13 +134,7 @@ html {
 body {
     font-family: "DM Sans", sans-serif;
     font-optical-sizing: auto;
-    background: transparent;
-    background-image: url('../../resources/tulip.jpg');
-    background-size: cover;
-    background-position: bottom;
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-    animation: bg-move 20s ease-in-out infinite alternate;
+    background: #383b43;
     color: #FFF;
     /* `overflow-y: auto` & `overflow-x: hidden` DIHAPUS supaya browser
         memakai scrollbar native permanen di pinggir, menyatu dengan ujung
@@ -222,48 +216,13 @@ a { color: var(--accent-color); }
 
 /* ── Layar loading layar-penuh ──
    Posisi fixed + z-index tinggi menutupi seluruh viewport selama settings
-   dimuat. Isinya HANYA loader di atas latar tulip yang diblur. */
-#loading {
-    position: fixed;
-    z-index: 1111;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    color: #FFF;
-    opacity: 1;
-    transition: opacity 300ms var(--glass-ease);
-    isolation: isolate;
-    /* Cegah scrollbar melayang apa pun yang terjadi di dalam loading */
-    overflow: hidden;
-}
+   dimuat. Isinya HANYA loader di atas latar gelap. */
 
 /* `inset: -40px` + `scale(1.08)` menutupi halo transparan di tepi
    yang selalu muncul pada filter: blur(). */
-#loading::before {
-    content: "";
-    position: absolute;
-    inset: -40px;
-    z-index: -1;
-    pointer-events: none;
-    background-image: url('../../resources/tulip.jpg');
-    background-size: cover;
-    background-position: bottom;
-    background-repeat: no-repeat;
-    background-color: transparent;
-    filter: blur(18px) saturate(120%) brightness(0.55);
-    transform: scale(1.08);
-}
 
 /* .hidden = fade-out. display:none dipasang setelah transisi selesai
    supaya benar-benar hilang dan tidak menghalangi klik. */
-#loading.hidden {
-    opacity: 0;
-    pointer-events: none;
-}
 
 #settingsPanel .loading-settings {
     text-align: center;
@@ -277,7 +236,6 @@ a { color: var(--accent-color); }
     letter-spacing: 0.02em;
 }
 
-#loading .loader-wrapper,
 #settingsPanel .loader-wrapper {
     width: 148px;
     height: 100px;
@@ -287,7 +245,6 @@ a { color: var(--accent-color); }
     margin: 0 auto;
 }
 
-#loading .loader,
 #settingsPanel .loader {
     width: 148px;
     height: 100px;
@@ -296,7 +253,6 @@ a { color: var(--accent-color); }
     position: absolute;
 }
 
-#loading .loader:after,
 #settingsPanel .loader:after {
     content: "";
     top: auto;
@@ -308,13 +264,11 @@ a { color: var(--accent-color); }
     height: 0.25em;
     width: 1em;
     border-radius: 50%;
-    /* aslinya biru gelap — diganti putih redup agar terbaca di atas tulip */
+    /* aslinya biru gelap — diganti putih redup agar terbaca di latar gelap */
     background-color: rgba(255, 255, 255, 0.75);
     opacity: 0.3;
 }
 
-#loading .roller,
-#loading .roller:last-child,
 #settingsPanel .roller,
 #settingsPanel .roller:last-child {
     width: 70px;
@@ -326,7 +280,6 @@ a { color: var(--accent-color); }
     transform: rotate(135deg);
 }
 
-#loading .roller:last-child,
 #settingsPanel .roller:last-child {
     left: auto;
     right: 0;
@@ -334,8 +287,6 @@ a { color: var(--accent-color); }
     animation: rollercoaster2 1.2s infinite linear;
 }
 
-#loading .roller:before,
-#loading .roller:last-child:before,
 #settingsPanel .roller:before,
 #settingsPanel .roller:last-child:before {
     content: "";
@@ -1386,21 +1337,17 @@ body.dashboard-mode #settings {
 
 body.dashboard-mode #settingsPanel {
     max-width: 100%;
-    padding-bottom: 96px;   /* ruang untuk footer yang menempel */
 }
 
 /* Layar loading DIPAKAI di mode dashboard — lebih baik ada penanda proses
    daripada panel kosong saat menunggu settings.json. Dulu disembunyikan
    karena overlay-nya dihapus script; sekarang overlay dipertahankan. */
-body.dashboard-mode #loading {
-    display: flex;
-}
 
 /* Hanya padding header dan line-height judul (6em = ruang kosong sangat
    besar) yang dirapikan; font/ukuran/warna tidak disentuh. */
 body.dashboard-mode #settings header {
     padding: 8px 0 4px;
-    margin-bottom: 10px;
+    margin-bottom: 28px;
 }
 
 body.dashboard-mode #settings header h1 {
@@ -1543,6 +1490,23 @@ body.dashboard-mode::before {
 
 .scene-option:hover {
     background-color: rgba(255, 255, 255, 0.10);
+}
+
+/* Entri settings terakhir yang dimuat — ditaruh paling atas popup. */
+.scene-option-last {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.scene-option-last .scene-option-name::after {
+    content: "Terakhir";
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background-color: rgba(76, 201, 255, 0.18);
+    color: var(--c-action, #4cc9ff);
+    font-size: 0.72rem;
+    font-weight: 600;
+    vertical-align: middle;
 }
 
 .scene-option-name {

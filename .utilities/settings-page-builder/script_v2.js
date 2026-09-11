@@ -364,9 +364,25 @@ function RenderSceneMenu(scenes) {
     if (!sceneMenu) return;
     sceneMenu.innerHTML = '';
 
-    scenes.forEach(({ scene }) => {
+    // Settings terakhir yang dimuat ditaruh paling atas supaya langsung
+    // kelihatan; sisanya menyusul urutan abjad. Baca localStorage langsung
+    // (bukan ListSavedScenes) — fungsi itu dideklarasikan lebih bawah dan
+    // memicu ReferenceError (TDZ) bila dipanggil dari sini.
+    let last = '';
+    try { last = localStorage.getItem(LAST_SCENE_KEY) || ''; } catch (e) { /* abaikan */ }
+
+    const ordered = (() => {
+        const copy = scenes.slice();
+        if (!last) return copy;
+        const idx = copy.findIndex(s => s.scene === last);
+        if (idx > 0) return [copy[idx], ...copy.slice(0, idx), ...copy.slice(idx + 1)];
+        return copy;
+    })();
+
+    ordered.forEach(({ scene }) => {
         const row = document.createElement('div');
         row.className = 'scene-option';
+        if (last && scene === last) row.classList.add('scene-option-last');
 
         const nameBtn = document.createElement('button');
         nameBtn.type = 'button';
@@ -506,12 +522,17 @@ if (loadObsButton && loadSceneModal) {
         RenderSceneMenu(scenes);
         CloseSceneMenu();
 
-        // Pilih scene aktif bila profilnya ada.
+        // Pilihan default = settings terakhir yang dimuat (bila profilnya
+        // masih ada). Hanya kalau belum pernah ada pilihan, fallback ke
+        // scene OBS aktif lalu entri pertama.
+        const last = ReadLastScene();
         const current = await ObsGetCurrentSceneName();
         SetSelectedScene(
-            (current && scenes.some(s => s.scene === current))
-                ? current
-                : (scenes[0]?.scene || '')
+            (last && scenes.some(s => s.scene === last))
+                ? last
+                : (current && scenes.some(s => s.scene === current))
+                    ? current
+                    : (scenes[0]?.scene || '')
         );
 
         if (sceneHintEl) {
