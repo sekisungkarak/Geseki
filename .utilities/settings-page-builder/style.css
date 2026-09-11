@@ -126,7 +126,7 @@ body::before {
 html {
     scroll-behavior: smooth;
     overflow-wrap: break-word;
-    background-color: rgb(2, 6, 23);
+    background-color: transparent;
     /* `width: 100vw` DIHAPUS: memaksa lebar statis, membuat scrollbar
        overlay muncul ke dalam dan menutupi konten. */
 }
@@ -134,7 +134,7 @@ html {
 body {
     font-family: "DM Sans", sans-serif;
     font-optical-sizing: auto;
-    background: rgb(2, 6, 23);
+    background: transparent;
     background-image: url('../../resources/tulip.jpg');
     background-size: cover;
     background-position: bottom;
@@ -206,69 +206,6 @@ a { color: var(--accent-color); }
     color: #ffffff;
 }
 
-#settings header nav {
-    width: 100%;
-    position: relative;
-    font-size: 1.5rem;
-    padding: .5em;
-    resize: horizontal;
-    overflow: hidden;
-}
-
-#settings header nav.glass::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    backdrop-filter: url(#pack-upper);
-}
-
-#settings header nav.glass::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    backdrop-filter: url(#liquid-glass-new);
-    box-shadow: none;
-    border: none;
-}
-
-#settings header nav::-webkit-resizer {
-    background: #fff;
-    border-radius: 99em;
-    box-shadow: 0 0 20px 1px #fff;
-    outline: 20px solid transparent;
-    pointer-events: all;
-}
-
-#settings header .icons {
-    font-size: 2.1rem;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-around;
-    filter: url(#round) url(#pack-lower);
-    mix-blend-mode: plus-lighter;
-}
-
-#settings header .icon {
-    pointer-events: all;
-    width: 3em;
-    aspect-ratio: 1;
-    border-radius: 1.5em;
-    background: #fff;
-    padding: .85em;
-    margin: -0.2em;
-    cursor: pointer;
-    overflow: visible;
-    transition: scale 1s linear(0, 0.038 1.6%, 0.154 3.4%, 1.026 12.6%, 1.166 15.2%, 1.234 18%, 1.221 21.6%, 1.005 31.2%, 0.944 37%, 1.013 56%, 1);
-    will-change: transform;
-}
-
-#settings header nav:has(.icon:active) .icon:hover {
-    transition-timing-function: ease-out;
-    transition-duration: 130ms;
-    scale: .75;
-}
-
 #settingsPanel {
     padding-bottom: 20px;
     flex-grow: 1;
@@ -316,7 +253,7 @@ a { color: var(--accent-color); }
     background-size: cover;
     background-position: bottom;
     background-repeat: no-repeat;
-    background-color: rgb(2, 6, 23);
+    background-color: transparent;
     filter: blur(18px) saturate(120%) brightness(0.55);
     transform: scale(1.08);
 }
@@ -1457,13 +1394,6 @@ body.dashboard-mode #settingsPanel {
    karena overlay-nya dihapus script; sekarang overlay dipertahankan. */
 body.dashboard-mode #loading {
     display: flex;
-}
-
-/* Header dashboard: sisakan TEKS judul saja. Ikon nav.glass
-   disembunyikan — di dock OBS tidak ada fungsinya dan memakan tempat.
-   Disembunyikan via CSS agar halaman settings biasa tidak berubah. */
-body.dashboard-mode #settings header nav.glass {
-    display: none !important;
 }
 
 /* Hanya padding header dan line-height judul (6em = ruang kosong sangat
