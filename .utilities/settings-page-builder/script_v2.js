@@ -1877,6 +1877,179 @@ function InitTikTokBadge() {
 const NP_RELAY_INTERVAL = 1000;   // FetchNowPlaying = 1000ms sesuai permintaan
 const NP_RELAY_STALE = 4000;      // widget anggap relay mati setelah 4s tanpa pesan
 
+// ── Relay song change ke Streamer.bot ─────────────────────────
+// Dashboard mem-poll SMTC sendiri, jadi deteksi ganti lagu dilakukan di sini
+// dan widget tidak disentuh sama sekali. Pemilihan sesi meniru logika widget:
+// included/excluded apps -> priority PLAYING -> current_session_id.
+const RELAY_PLAYING = 4;        // PlaybackStatus.PLAYING (konstanta SMTC)
+let relaySb = null;             // klien Streamer.bot khusus relay
+let relayLastSongId = null;     // kunci lagu terakhir (anti-dobel)
+let relayBusy = false;          // cegah tumpang tindih saat ekstraksi palet
+
+function GetRelaySb() {
+    if (typeof StreamerbotClient === 'undefined') return null;
+    const host = document.getElementById('address')?.value
+        || settingsMap.get('address') || '127.0.0.1';
+    const port = document.getElementById('port')?.value
+        || settingsMap.get('port') || 8080;
+
+    // Buat ulang bila alamat atau port berubah.
+    if (relaySb && relaySb.__host === host && String(relaySb.__port) === String(port)) {
+        return relaySb;
+    }
+    try { relaySb?.disconnect?.(); } catch (e) { /* abaikan */ }
+    try {
+        relaySb = new StreamerbotClient({ host, port, autoReconnect: true });
+        relaySb.__host = host;
+        relaySb.__port = port;
+    } catch (e) {
+        relaySb = null;
+    }
+    return relaySb;
+}
+
+// Pilih sesi SMTC yang dipakai, sama seperti widget.
+function PickRelaySession(data) {
+    const sessions = data.sessions || [];
+    if (!sessions.length) return null;
+
+    const list = (v) => String(v || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const included = list(document.getElementById('includedApplications')?.value
+        || settingsMap.get('includedApplications'));
+    const excluded = list(document.getElementById('excludedApplications')?.value
+        || settingsMap.get('excludedApplications'));
+
+    const valid = sessions.filter(s =>
+        !excluded.some(ex => (s.source_app_id || '').toLowerCase().includes(ex)));
+    if (!valid.length) return null;
+
+    if (included.length) {
+        for (const app of included) {
+            const hit = valid.find(s => (s.source_app_id || '').toLowerCase().includes(app)
+                && s.playback_info?.PlaybackStatus === RELAY_PLAYING);
+            if (hit) return hit;
+        }
+        for (const app of included) {
+            const hit = valid.find(s => (s.source_app_id || '').toLowerCase().includes(app));
+            if (hit) return hit;
+        }
+        return null;
+    }
+
+    const cur = valid.find(s => s.source_app_id === data.current_session_id);
+    if (cur && cur.playback_info?.PlaybackStatus === RELAY_PLAYING) return cur;
+
+    const playing = valid.find(s => s.playback_info?.PlaybackStatus === RELAY_PLAYING);
+    return playing || valid[0];
+}
+
+// base64 mentah dari SMTC -> data URL. Identik dengan widget: tanpa cek
+// panjang, cukup bukan http dan bukan data:. Warna Vibrant bergantung byte
+// gambar yang didekode, jadi input harus menghasilkan URL yang sama persis.
+function NormalizeRelayArt(raw) {
+    if (!raw) return '';
+    if (raw.startsWith('http') || raw.startsWith('data:')) return raw;
+    return 'data:image/jpeg;base64,' + raw;
+}
+
+// Ekstrak palet dari artwork. Identik dengan GetAccentPalette() di widget:
+// versi Vibrant, API callback, getHex(), dan urutan fallback harus sama
+// persis supaya warna relay = warna overlay.
+async function GetRelayPalette(artUrl) {
+    // Fallback widget bila Vibrant gagal.
+    const errPalette = { Vibrant: '#ffffff', Muted: '#cccccc', DarkVibrant: '#000000' };
+    if (!artUrl) return { color: '#8A2BE2', palette: {} };
+
+    if (typeof Vibrant === 'undefined') {
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/node-vibrant/3.1.6/vibrant.min.js';
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+        }).catch(() => {});
+    }
+    if (typeof Vibrant === 'undefined') return { color: '#8A2BE2', palette: {} };
+
+    const hexPalette = await new Promise((resolve) => {
+        Vibrant.from(artUrl).getPalette((err, palette) => {
+            if (err) return resolve(errPalette);
+            const out = {};
+            for (const role in palette) {
+                if (palette[role]) out[role] = palette[role].getHex();
+            }
+            resolve(out);
+        });
+    });
+
+    // Urutan fallback sama dengan widget: LightVibrant -> Vibrant -> #8A2BE2.
+    const color = hexPalette.LightVibrant || hexPalette.Vibrant || '#8A2BE2';
+    return { color, palette: hexPalette };
+}
+
+// Tunggu artwork benar-benar bisa digambar, sama seperti widget. Palet hanya
+// valid bila gambar sukses didekode; kalau gagal, simpan niat dan coba tick
+// berikutnya supaya warna tidak jatuh ke fallback.
+async function RelayWaitArtwork(artUrl) {
+    if (!artUrl) return false;
+    return await new Promise((resolve) => {
+        const img = new Image();
+        let done = false;
+        const finish = (ok) => { if (!done) { done = true; resolve(ok); } };
+        const timer = setTimeout(() => finish(false), 3000);
+        img.onload = () => { clearTimeout(timer); finish(img.naturalWidth > 0 && img.naturalHeight > 0); };
+        img.onerror = () => { clearTimeout(timer); finish(false); };
+        img.src = artUrl;
+    });
+}
+
+// Deteksi ganti lagu lalu tembak trigger 'spotify.songchange'.
+async function RelaySongChange(data) {
+    if (relayBusy) return;
+    const s = PickRelaySession(data);
+    if (!s) return;
+
+    const mp = s.media_properties || {};
+    const title = mp.Title || '';
+    const artist = mp.Artist || '';
+    // Metadata "Unknown" belum final; jangan dipakai sebagai kunci lagu.
+    if (!title || !artist || title === 'Unknown' || artist === 'Unknown') return;
+
+    const songId = (title + '|' + artist).toLowerCase();
+    if (songId === relayLastSongId) return;
+
+    // Artwork harus ada DULU: tanpa artwork palet jatuh ke fallback.
+    const rawArt = mp.Thumbnail || mp.ThumbnailBase64 || '';
+    if (!rawArt) return;                      // tunggu tick berikutnya
+    const artUrl = NormalizeRelayArt(rawArt);
+    const artReady = await RelayWaitArtwork(artUrl);
+    if (!artReady) return;                    // artwork belum valid, coba lagi nanti
+
+    relayBusy = true;
+    try {
+        const { color, palette } = await GetRelayPalette(artUrl);
+
+        const sb = GetRelaySb();
+        if (!sb || typeof sb.executeCodeTrigger !== 'function') return;
+
+        sb.executeCodeTrigger('spotify.songchange', {
+            title,
+            artist,
+            album: mp.AlbumTitle || '',
+            thumbnail: artUrl,
+            color,
+            palette,
+            playbackStatus: s.playback_info?.PlaybackStatus ?? 0
+        });
+        relayLastSongId = songId;
+        console.log('[Geseki][Relay] songchange terkirim:', title, '-', artist);
+    } catch (e) {
+        console.warn('[Geseki][Relay] Gagal kirim songchange:', e);
+    } finally {
+        relayBusy = false;
+    }
+}
+
 function InitNowPlayingRelay() {
     if (!window.BroadcastChannel) return;
 
@@ -1919,6 +2092,9 @@ function InitNowPlayingRelay() {
                 sessions: data.sessions || [],
                 current_session_id: data.current_session_id || null
             };
+            // Deteksi ganti lagu + kirim ke Streamer.bot (relay berdiri sendiri,
+            // tidak lewat widget).
+            RelaySongChange(lastNowPlayingPayload);
         } catch (e) {
             lastNowPlayingPayload = { enabled: true, ok: false, sessions: [], current_session_id: null };
         }
