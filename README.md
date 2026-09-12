@@ -3,7 +3,7 @@
 Koleksi widget overlay OBS untuk streaming. Widget berupa HTML/CSS/JS polos yang dimuat
 sebagai browser source di OBS — tanpa build step, tanpa framework.
 
-## Demo / Akses
+## Akses
 
 Widget di-deploy otomatis ke **GitHub Pages** lewat GitHub Actions. Setiap push ke
 `master` memicu deploy ulang.
@@ -60,7 +60,7 @@ first chatter, plus panel Now Playing dari media yang sedang diputar.
 
 ## Cara pakai
 
-### 1. Buka dashboard
+### 1. Buka dashboard (Jadikan dock OBS)
 
 ```
 https://sekisungkarak.github.io/Geseki/dynamic-island-alert/dashboard/index.html
@@ -68,7 +68,7 @@ https://sekisungkarak.github.io/Geseki/dynamic-island-alert/dashboard/index.html
 
 Dashboard adalah satu-satunya halaman kontrol — untuk browser biasa maupun dock OBS.
 
-### 2. Hubungkan ke OBS
+### 2. Pasang widget di OBS
 
 Isi **OBS Connection** (Server IP / Port / Password) bila beda dari default
 `127.0.0.1:4455`. Lalu klik **Save** — source otomatis dibuat atau diperbarui di scene
@@ -77,13 +77,6 @@ aktif OBS lewat obs-websocket.
 - **Load** — memuat settings tersimpan per scene
 - **Reset** — mengembalikan ke default (koneksi OBS tidak ikut tereset)
 
-### 3. Pasang widget di OBS
-
-Arahkan Browser Source ke salah satu cabang:
-
-| Cabang | URL |
-| --- | --- |
-| OBS | `https://sekisungkarak.github.io/Geseki/dynamic-island-alert/obs/index.html` |
 
 ## Pengembangan lokal
 
@@ -119,13 +112,3 @@ Lalu buka `http://127.0.0.1:3000/dynamic-island-alert/dashboard/index.html`.
   widget mendeteksi tidak adanya `window.obsstudio` lalu memasang latar gelap agar tidak
   silau; di OBS tetap transparan.
 
-## Deploy
-
-Workflow `.github/workflows/deploy-pages.yml` mempublikasikan seluruh isi repo ke GitHub
-Pages setiap push ke `master`. Aktifkan Pages di **Settings → Pages → Source: GitHub
-Actions**.
-
-```bash
-git log --oneline
-git status
-```

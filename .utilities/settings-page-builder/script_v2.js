@@ -2039,6 +2039,7 @@ async function RelaySongChange(data) {
             thumbnail: artUrl,
             color,
             palette,
+			source: s.source_app_id || '',
             playbackStatus: s.playback_info?.PlaybackStatus ?? 0
         });
         relayLastSongId = songId;
