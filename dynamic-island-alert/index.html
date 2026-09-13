@@ -84,12 +84,7 @@
 	var q = new URLSearchParams(location.search).get('engine');
 	var ua = navigator.userAgent;
 	var isObs  = /OBS/i.test(ua) || typeof window.obsstudio !== 'undefined';
-	var isTtls = /TikTok/i.test(ua) || /TTLS/i.test(ua) || /TTElectron/i.test(ua);
 
-	if (q === 'ttls' || isTtls) {
-		location.replace('./ttls/index.html' + location.search);
-		return;
-	}
 	if (q === 'obs' || isObs) {
 		location.replace('./obs/index.html' + location.search);
 		return;

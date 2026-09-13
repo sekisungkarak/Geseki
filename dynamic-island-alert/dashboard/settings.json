@@ -304,6 +304,27 @@
       "placeholder": "Tidak ada opsi"
     },
     {
+      "id": "accentPaletteRole",
+      "label": "Accent Color",
+      "type": "select",
+      "options": [
+        {
+          "value": "lightVibrant",
+          "label": "Light Vibrant (default)"
+        },
+        {
+          "value": "vibrant",
+          "label": "Vibrant"
+        },
+        {
+          "value": "darkVibrant",
+          "label": "Dark Vibrant"
+        }
+      ],
+      "defaultValue": "lightVibrant",
+      "group": "SMTC Connection"
+    },
+    {
       "id": "tiktokService",
       "label": "TikTok Service Provider",
       "type": "select",

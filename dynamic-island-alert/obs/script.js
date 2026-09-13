@@ -100,6 +100,30 @@ const enableDynamicBig = GetBoolParam("enableDynamicStyleBig", true);
 const SMTC_BRIDGE_PORT = GetIntParam("smtcBridgePort", 5000);
 const SMTC_BRIDGE_URL = `http://127.0.0.1:${SMTC_BRIDGE_PORT}/now-playing`;
 
+// Peran warna palet artwork untuk accent (wave icon, pause overlay, scrubber).
+// 'lightVibrant' = perilaku lama, jadi widget tanpa param tampil persis seperti sebelumnya.
+const accentPaletteRole = (urlParams.get("accentPaletteRole") || "lightVibrant").toLowerCase();
+
+// Pemetaan role settings -> key palet Vibrant.js. Nama key harus sama persis dengan
+// output GetAccentPalette() (LightVibrant, Vibrant, DarkVibrant).
+const ACCENT_ROLE_MAP = {
+	lightvibrant: 'LightVibrant',
+	vibrant: 'Vibrant',
+	darkvibrant: 'DarkVibrant'
+};
+
+// Ambil warna accent dari palet sesuai role pilihan user.
+// Fallback: role pilihan -> LightVibrant -> Vibrant -> ungu default.
+// Palet Vibrant.js tidak selalu punya semua role (artwork gelap biasanya tanpa LightVibrant),
+// jadi fallback ini penting supaya accent tidak pernah kosong.
+function ResolveAccentColor(hexPalette) {
+	const preferred = ACCENT_ROLE_MAP[accentPaletteRole];
+	return (preferred && hexPalette[preferred])
+		|| hexPalette.LightVibrant
+		|| hexPalette.Vibrant
+		|| '#8A2BE2';
+}
+
 // Path ../../ karena script ini di subfolder obs/.
 const alertAudio = new Audio("../../resources/sfx/notification.mp3");
 alertAudio.volume = 0.5;
@@ -1136,13 +1160,9 @@ async function FetchNowPlaying() {
 				if (nowPlayingData._lastSongKey !== expectedKeyOnFinish) return;
 
 				nowPlayingData.palette = hexPalette;
-				if (hexPalette.LightVibrant) {
-					nowPlayingData.lightVibrant = hexPalette.LightVibrant;
-				} else if (hexPalette.Vibrant) {
-					nowPlayingData.lightVibrant = hexPalette.Vibrant;
-				} else {
-					nowPlayingData.lightVibrant = "#8A2BE2";
-				}
+				// Warna accent mengikuti role pilihan user (settings: accentPaletteRole).
+				// ResolveAccentColor() sudah menangani fallback bila role tidak ada di palet.
+				nowPlayingData.lightVibrant = ResolveAccentColor(hexPalette);
 			} catch (e) {
 				if (nowPlayingData._lastSongKey !== expectedKeyOnFinish) return;
 				nowPlayingData.lightVibrant = nowPlayingData.lightVibrant || "#8A2BE2";

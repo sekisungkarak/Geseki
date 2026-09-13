@@ -33,8 +33,7 @@ Geseki/
 │   │   ├── index.html
 │   │   ├── dashboard.js
 │   │   └── settings.json
-│   ├── obs/                    # varian widget untuk OBS
-│   └── ttls/                   # varian widget untuk TikTok LIVE Studio
+│   └── obs/                    # varian widget untuk OBS
 └── resources/                  # aset bersama, level root (bukan per-widget)
     ├── icons/platforms/        # kick, kofi, obs, patreon, streamerbot, tiktok, twitch, youtube
     ├── icons/badges/
